@@ -1,5 +1,8 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from sdv.single_table import CTGANSynthesizer
+from sdv.metadata import SingleTableMetadata
 import pandas as pd
 import io
 
@@ -9,7 +12,6 @@ app = FastAPI(
     version="0.1.0"
 )
 
-# Allow frontend to talk to backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -28,15 +30,12 @@ def health():
 
 @app.post("/upload")
 async def upload_csv(file: UploadFile = File(...)):
-    # Check if file is a CSV
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are allowed")
-    
-    # Read the file
+
     contents = await file.read()
     df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
 
-    # Build a summary
     summary = {
         "filename": file.filename,
         "rows": len(df),
@@ -46,3 +45,47 @@ async def upload_csv(file: UploadFile = File(...)):
     }
 
     return summary
+
+@app.post("/generate")
+async def generate_synthetic_data(
+    file: UploadFile = File(...),
+    num_rows: int = 500
+):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are allowed")
+
+    # Read uploaded CSV
+    contents = await file.read()
+    df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
+
+    # Limit free tier to 500 rows output
+    if num_rows > 500:
+        num_rows = 500
+
+    try:
+        # Detect metadata automatically
+        metadata = SingleTableMetadata()
+        metadata.detect_from_dataframe(df)
+
+        # Train CTGAN
+        synthesizer = CTGANSynthesizer(metadata, epochs=100, verbose=False)
+        synthesizer.fit(df)
+
+        # Generate synthetic rows
+        synthetic_df = synthesizer.sample(num_rows=num_rows)
+
+        # Return as downloadable CSV
+        output = io.StringIO()
+        synthetic_df.to_csv(output, index=False)
+        output.seek(0)
+
+        return StreamingResponse(
+            io.BytesIO(output.getvalue().encode()),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename=synthetic_{file.filename}"
+            }
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
