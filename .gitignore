@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+
+# Environment
+.env
+.env.local
+
+# Next.js
+frontend/.next/
+frontend/out/
+
+# Python
+backend/venv/
+*.egg-info/
+
+# OS
+.DS_Store
