@@ -1,13 +1,33 @@
 "use client"
 import { useState, useRef } from "react"
 
+const severityColor = {
+  high: "border-red-500/50 bg-red-500/5",
+  medium: "border-yellow-500/50 bg-yellow-500/5",
+}
+
+const severityBadge = {
+  high: "bg-red-500/20 text-red-400",
+  medium: "bg-yellow-500/20 text-yellow-400",
+}
+
+const scoreColor = {
+  green: "text-green-400",
+  yellow: "text-yellow-400",
+  red: "text-red-400"
+}
+
 export default function Home() {
   const [file, setFile] = useState(null)
   const [summary, setSummary] = useState(null)
+  const [issues, setIssues] = useState([])
+  const [fixes, setFixes] = useState([])
+  const [step, setStep] = useState("upload") // upload → analyse → quality → generate → result
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState(null)
   const [numRows, setNumRows] = useState(300)
+  const [result, setResult] = useState(null)
   const inputRef = useRef(null)
 
   const handleFile = (selectedFile) => {
@@ -18,9 +38,13 @@ export default function Home() {
     setFile(selectedFile)
     setError(null)
     setSummary(null)
+    setIssues([])
+    setFixes([])
+    setResult(null)
+    setStep("upload")
   }
 
-  const handleUpload = async () => {
+  const handleAnalyse = async () => {
     if (!file) return
     setLoading(true)
     setError(null)
@@ -29,17 +53,34 @@ export default function Home() {
     formData.append("file", file)
 
     try {
-      const res = await fetch("http://localhost:8000/upload", {
+      const res = await fetch("http://localhost:8000/analyse", {
         method: "POST",
         body: formData,
       })
       const data = await res.json()
       setSummary(data)
+
+      // Default all fixes to approved
+      const defaultFixes = data.issues.map((issue) => ({
+        column: issue.column,
+        issue: issue.issue,
+        fix_type: issue.fix_type,
+        approved: true
+      }))
+      setIssues(data.issues)
+      setFixes(defaultFixes)
+      setStep(data.issues.length > 0 ? "quality" : "generate")
     } catch (err) {
       setError("Could not connect to backend. Is it running?")
     } finally {
       setLoading(false)
     }
+  }
+
+  const toggleFix = (index) => {
+    setFixes((prev) =>
+      prev.map((f, i) => i === index ? { ...f, approved: !f.approved } : f)
+    )
   }
 
   const handleGenerate = async () => {
@@ -49,9 +90,10 @@ export default function Home() {
 
     const formData = new FormData()
     formData.append("file", file)
+    formData.append("fixes", JSON.stringify(fixes))
 
     try {
-      const res = await fetch(`http://localhost:8000/generate?num_rows=${numRows}`, {
+      const res = await fetch(`http://localhost:8000/generate-with-score?num_rows=${numRows}`, {
         method: "POST",
         body: formData,
       })
@@ -61,14 +103,9 @@ export default function Home() {
         throw new Error(err.detail)
       }
 
-      // Trigger file download
-      const blob = await res.blob()
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = `synthetic_${file.name}`
-      a.click()
-      window.URL.revokeObjectURL(url)
+      const data = await res.json()
+      setResult(data)
+      setStep("result")
 
     } catch (err) {
       setError(err.message || "Generation failed. Please try again.")
@@ -76,6 +113,19 @@ export default function Home() {
       setGenerating(false)
     }
   }
+
+  const handleDownload = () => {
+    if (!result?.csv_data) return
+    const blob = new Blob([result.csv_data], { type: "text/csv" })
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `synthetic_${file.name}`
+    a.click()
+    window.URL.revokeObjectURL(url)
+  }
+
+  const approvedCount = fixes.filter(f => f.approved).length
 
   return (
     <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center px-4 py-16">
@@ -90,90 +140,148 @@ export default function Home() {
         </p>
       </div>
 
-      {/* Upload Box */}
-      <div
-        onClick={() => inputRef.current.click()}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault()
-          handleFile(e.dataTransfer.files[0])
-        }}
-        className="border-2 border-dashed border-violet-500 rounded-2xl p-12 text-center w-full max-w-lg cursor-pointer hover:bg-violet-500/5 transition-all"
-      >
-        <p className="text-4xl mb-4">📂</p>
-        {file ? (
-          <p className="text-violet-400 font-semibold">{file.name}</p>
-        ) : (
-          <>
-            <p className="text-white font-semibold text-lg">Drop your CSV here</p>
-            <p className="text-gray-500 text-sm mt-2">or click to browse</p>
-          </>
-        )}
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".csv"
-          className="hidden"
-          onChange={(e) => handleFile(e.target.files[0])}
-        />
+      {/* Step Indicator */}
+      <div className="flex items-center gap-2 mb-8 text-sm">
+        {["Upload", "Quality Check", "Generate", "Result"].map((s, i) => {
+          const stepKeys = ["upload", "quality", "generate", "result"]
+          const current = stepKeys.indexOf(step)
+          const isActive = i === current
+          const isDone = i < current
+          return (
+            <div key={s} className="flex items-center gap-2">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold
+                ${isDone ? "bg-violet-600 text-white" : isActive ? "bg-violet-500 text-white" : "bg-gray-800 text-gray-500"}`}>
+                {isDone ? "✓" : i + 1}
+              </div>
+              <span className={isActive ? "text-white" : isDone ? "text-violet-400" : "text-gray-600"}>
+                {s}
+              </span>
+              {i < 3 && <span className="text-gray-700">→</span>}
+            </div>
+          )
+        })}
       </div>
 
-      {/* Error */}
-      {error && (
-        <p className="text-red-400 text-sm mt-4">{error}</p>
-      )}
+      <div className="w-full max-w-lg space-y-4">
 
-      {/* Analyse Button */}
-      {file && !summary && (
-        <button
-          onClick={handleUpload}
-          disabled={loading}
-          className="mt-6 bg-violet-600 hover:bg-violet-700 text-white font-semibold px-8 py-3 rounded-xl transition-all disabled:opacity-50"
+        {/* Upload Box — always visible */}
+        <div
+          onClick={() => inputRef.current.click()}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault()
+            handleFile(e.dataTransfer.files[0])
+          }}
+          className="border-2 border-dashed border-violet-500 rounded-2xl p-10 text-center cursor-pointer hover:bg-violet-500/5 transition-all"
         >
-          {loading ? "Analysing..." : "Analyse Dataset"}
-        </button>
-      )}
+          <p className="text-4xl mb-4">📂</p>
+          {file ? (
+            <p className="text-violet-400 font-semibold">{file.name}</p>
+          ) : (
+            <>
+              <p className="text-white font-semibold text-lg">Drop your CSV here</p>
+              <p className="text-gray-500 text-sm mt-2">or click to browse</p>
+            </>
+          )}
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={(e) => handleFile(e.target.files[0])}
+          />
+        </div>
 
-      {/* Summary */}
-      {summary && (
-        <div className="mt-8 w-full max-w-lg space-y-4">
+        {/* Error */}
+        {error && <p className="text-red-400 text-sm text-center">{error}</p>}
 
-          {/* Stats */}
+        {/* Analyse Button */}
+        {file && step === "upload" && (
+          <button
+            onClick={handleAnalyse}
+            disabled={loading}
+            className="w-full bg-violet-600 hover:bg-violet-700 text-white font-semibold px-8 py-3 rounded-xl transition-all disabled:opacity-50"
+          >
+            {loading ? "Analysing dataset..." : "Analyse Dataset"}
+          </button>
+        )}
+
+        {/* Data Quality Report */}
+        {step === "quality" && issues.length > 0 && (
           <div className="bg-gray-900 rounded-2xl p-6">
-            <h2 className="text-violet-400 font-semibold text-lg mb-4">Dataset Summary</h2>
-            <div className="grid grid-cols-2 gap-4 mb-4">
-              <div className="bg-gray-800 rounded-xl p-4">
-                <p className="text-gray-400 text-sm">Rows</p>
-                <p className="text-white text-2xl font-bold">{summary.rows}</p>
-              </div>
-              <div className="bg-gray-800 rounded-xl p-4">
-                <p className="text-gray-400 text-sm">Columns</p>
-                <p className="text-white text-2xl font-bold">{summary.columns}</p>
-              </div>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-violet-400 font-semibold text-lg">Data Quality Report</h2>
+              <span className="text-xs bg-gray-800 text-gray-400 px-3 py-1 rounded-full">
+                {approvedCount} fix{approvedCount !== 1 ? "es" : ""} selected
+              </span>
             </div>
-            <div className="bg-gray-800 rounded-xl p-4">
-              <p className="text-gray-400 text-sm mb-2">Columns Detected</p>
-              <div className="flex flex-wrap gap-2">
-                {summary.column_names.map((col) => (
-                  <span key={col} className="bg-violet-500/20 text-violet-300 text-xs px-3 py-1 rounded-full">
-                    {col}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
+            <p className="text-gray-500 text-sm mb-4">
+              We found {issues.length} potential issues. Toggle to approve or skip each fix.
+            </p>
 
-          {/* Generate Controls */}
+            <div className="space-y-3 mb-6">
+              {issues.map((issue, i) => (
+                <div
+                  key={i}
+                  className={`border rounded-xl p-4 transition-all ${fixes[i]?.approved
+                    ? severityColor[issue.severity]
+                    : "border-gray-700 bg-gray-800/50 opacity-50"
+                    }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-white font-semibold text-sm">{issue.column}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${severityBadge[issue.severity]}`}>
+                          {issue.severity}
+                        </span>
+                      </div>
+                      <p className="text-gray-400 text-xs">{issue.issue}</p>
+                      <p className="text-gray-500 text-xs mt-1">
+                        Fix: {issue.recommendation}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => toggleFix(i)}
+                      className={`shrink-0 w-10 h-6 rounded-full transition-all ${fixes[i]?.approved ? "bg-violet-600" : "bg-gray-700"}`}
+                    >
+                      <div className={`w-4 h-4 bg-white rounded-full mx-auto transition-all ${fixes[i]?.approved ? "translate-x-2" : "-translate-x-2"}`} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={() => setStep("generate")}
+              className="w-full bg-violet-600 hover:bg-violet-700 text-white font-semibold px-8 py-3 rounded-xl transition-all"
+            >
+              Continue with {approvedCount} fix{approvedCount !== 1 ? "es" : ""} →
+            </button>
+          </div>
+        )}
+
+        {/* Generate Controls */}
+        {step === "generate" && (
           <div className="bg-gray-900 rounded-2xl p-6">
             <h2 className="text-violet-400 font-semibold text-lg mb-4">Generate Synthetic Data</h2>
-            <div className="mb-4">
+
+            {approvedCount > 0 && (
+              <div className="bg-violet-500/10 border border-violet-500/30 rounded-xl p-3 mb-4">
+                <p className="text-violet-300 text-sm">
+                  ✓ {approvedCount} data quality fix{approvedCount !== 1 ? "es" : ""} will be applied before generation
+                </p>
+              </div>
+            )}
+
+            <div className="mb-6">
               <label className="text-gray-400 text-sm block mb-2">
-                Number of rows to generate: <span className="text-white font-bold">{numRows}</span>
+                Rows to generate: <span className="text-white font-bold">{numRows}</span>
               </label>
               <input
                 type="range"
                 min="100"
-                max="500"
+                max="1000"
                 step="50"
                 value={numRows}
                 onChange={(e) => setNumRows(Number(e.target.value))}
@@ -181,23 +289,76 @@ export default function Home() {
               />
               <div className="flex justify-between text-gray-600 text-xs mt-1">
                 <span>100</span>
-                <span>500 (free limit)</span>
+                <span>1000 (free limit)</span>
               </div>
             </div>
+
             <button
               onClick={handleGenerate}
               disabled={generating}
               className="w-full bg-violet-600 hover:bg-violet-700 text-white font-semibold px-8 py-3 rounded-xl transition-all disabled:opacity-50"
             >
-              {generating ? "Generating... (this takes ~1 min)" : "⚡ Generate Synthetic Dataset"}
+              {generating ? "Generating... (this takes ~2 mins)" : "⚡ Generate Synthetic Dataset"}
             </button>
           </div>
+        )}
 
-        </div>
-      )}
+        {/* Result */}
+        {step === "result" && result && (
+          <div className="bg-gray-900 rounded-2xl p-6 space-y-4">
+            <h2 className="text-violet-400 font-semibold text-lg">Generation Complete</h2>
+
+            <div className="bg-gray-800 rounded-xl p-6 text-center">
+              <p className="text-gray-400 text-sm mb-1">Realism Score</p>
+              <p className={`text-6xl font-bold ${scoreColor[result.color]}`}>
+                {result.realism_score}
+              </p>
+              <p className={`text-sm font-semibold mt-1 ${scoreColor[result.color]}`}>
+                {result.grade}
+              </p>
+              <p className="text-gray-600 text-xs mt-3">
+                How indistinguishable your synthetic data is from real data
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-gray-800 rounded-xl p-4 text-center">
+                <p className="text-gray-400 text-sm">Rows Generated</p>
+                <p className="text-white text-2xl font-bold">{result.rows_generated}</p>
+              </div>
+              <div className="bg-gray-800 rounded-xl p-4 text-center">
+                <p className="text-gray-400 text-sm">Fixes Applied</p>
+                <p className="text-white text-2xl font-bold">{approvedCount}</p>
+              </div>
+            </div>
+
+            <button
+              onClick={handleDownload}
+              className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold px-8 py-3 rounded-xl transition-all"
+            >
+              ⬇️ Download Synthetic Dataset
+            </button>
+
+            <button
+              onClick={() => {
+                setFile(null)
+                setSummary(null)
+                setIssues([])
+                setFixes([])
+                setResult(null)
+                setStep("upload")
+              }}
+              className="w-full bg-gray-800 hover:bg-gray-700 text-gray-400 font-semibold px-8 py-3 rounded-xl transition-all"
+            >
+              Start Over
+            </button>
+          </div>
+        )}
+
+      </div>
 
       <p className="text-gray-600 text-sm mt-8">
-        Supports CSV files · Free up to 500 rows
+        Supports CSV files · Free up to 1000 rows
       </p>
 
     </main>
