@@ -315,6 +315,7 @@ export default function Home() {
           <div className="bg-gray-900 rounded-2xl p-6 space-y-4">
             <h2 className="text-violet-400 font-semibold text-lg">Generation Complete</h2>
 
+            {/* Main Score */}
             <div className="bg-gray-800 rounded-xl p-6 text-center">
               <p className="text-gray-400 text-sm mb-1">Realism Score</p>
               <p className={`text-6xl font-bold ${scoreColor[result.color]}`}>
@@ -324,10 +325,85 @@ export default function Home() {
                 {result.grade}
               </p>
               <p className="text-gray-600 text-xs mt-3">
-                How indistinguishable your synthetic data is from real data
+                Weighted average of three quality metrics below
               </p>
             </div>
 
+            {/* Three Sub-scores */}
+            <div className="bg-gray-800 rounded-xl p-4 space-y-3">
+              <p className="text-gray-400 text-xs font-semibold uppercase tracking-wide">Score Breakdown</p>
+
+              <div className="space-y-2">
+                {[
+                  { label: "Distinguishability", value: result.distinguishability_score, desc: "Can a classifier tell real from synthetic?", weight: "20%" },
+                  { label: "Statistical Similarity", value: result.statistical_score, desc: "Do distributions match column by column?", weight: "50%" },
+                  { label: "Coverage", value: result.coverage_score, desc: "Does synthetic data cover the full data range?", weight: "30%" }
+                ].map((metric) => (
+                  <div key={metric.label}>
+                    <div className="flex justify-between items-center mb-1">
+                      <div>
+                        <span className="text-white text-xs font-semibold">{metric.label}</span>
+                        <span className="text-gray-600 text-xs ml-2">({metric.weight})</span>
+                      </div>
+                      <span className={`text-xs font-bold ${
+                        metric.value >= 80 ? "text-green-400" :
+                        metric.value >= 60 ? "text-yellow-400" : "text-red-400"
+                      }`}>{metric.value}</span>
+                    </div>
+                    <div className="w-full bg-gray-700 rounded-full h-1.5">
+                      <div
+                        className={`h-1.5 rounded-full transition-all ${
+                          metric.value >= 80 ? "bg-green-400" :
+                          metric.value >= 60 ? "bg-yellow-400" : "bg-red-400"
+                        }`}
+                        style={{ width: `${metric.value}%` }}
+                      />
+                    </div>
+                    <p className="text-gray-600 text-xs mt-0.5">{metric.desc}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Column Quality Report */}
+            {result.column_quality && result.column_quality.length > 0 && (
+              <div className="bg-gray-800 rounded-xl p-4">
+                <p className="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-3">
+                  Column Quality Report
+                </p>
+                <div className="space-y-2">
+                  {result.column_quality.map((col) => (
+                    <div key={col.column} className="flex items-center justify-between">
+                      <span className="text-gray-300 text-xs truncate flex-1">{col.column}</span>
+                      <div className="flex items-center gap-2 ml-2">
+                        <div className="w-16 bg-gray-700 rounded-full h-1">
+                          <div
+                            className={`h-1 rounded-full ${
+                              col.score >= 80 ? "bg-green-400" :
+                              col.score >= 60 ? "bg-yellow-400" : "bg-red-400"
+                            }`}
+                            style={{ width: `${col.score}%` }}
+                          />
+                        </div>
+                        <span className={`text-xs font-semibold w-8 text-right ${
+                          col.grade === "Excellent" ? "text-green-400" :
+                          col.grade === "Good" ? "text-yellow-400" :
+                          col.grade === "Fair" ? "text-orange-400" : "text-red-400"
+                        }`}>{col.grade === "Excellent" ? "✓" : col.grade === "Good" ? "~" : "!"}</span>
+                        <span className="text-gray-500 text-xs w-8 text-right">{col.score}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-4 mt-3 pt-3 border-t border-gray-700">
+                  <span className="text-green-400 text-xs">✓ Excellent (80+)</span>
+                  <span className="text-yellow-400 text-xs">~ Good (60+)</span>
+                  <span className="text-orange-400 text-xs">! Fair/Poor</span>
+                </div>
+              </div>
+            )}
+
+            {/* Stats Row */}
             <div className="grid grid-cols-3 gap-3">
               <div className="bg-gray-800 rounded-xl p-4 text-center">
                 <p className="text-gray-400 text-xs">Rows Generated</p>
@@ -342,6 +418,8 @@ export default function Home() {
                 <p className="text-violet-400 text-xs font-bold mt-1">{result.model_used}</p>
               </div>
             </div>
+
+            {/* Capped warning */}
             {result.capped && (
               <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3">
                 <p className="text-yellow-400 text-xs">
@@ -350,6 +428,7 @@ export default function Home() {
               </div>
             )}
 
+            {/* Download */}
             <button
               onClick={handleDownload}
               className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold px-8 py-3 rounded-xl transition-all"

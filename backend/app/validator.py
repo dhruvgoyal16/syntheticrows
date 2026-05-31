@@ -139,8 +139,7 @@ def validate(real_df: pd.DataFrame, synthetic_df: pd.DataFrame) -> ValidationRes
     c_score = coverage_score(real_df, synthetic_df)
 
     # Weighted final score
-    final = round(d_score * 0.4 + s_score * 0.4 + c_score * 0.2, 1)
-
+    final = round(d_score * 0.2 + s_score * 0.5 + c_score * 0.3, 1)
     if final >= 80:
         grade = "Excellent"
         color = "green"
