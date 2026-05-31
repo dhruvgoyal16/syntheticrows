@@ -291,6 +291,13 @@ export default function Home() {
                 <span>100</span>
                 <span>1000 (free limit)</span>
               </div>
+              {summary && numRows > summary.rows * 2 && (
+                <div className="mt-3 bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3">
+                  <p className="text-yellow-400 text-xs">
+                    ⚠️ Your dataset has {summary.rows} rows. Generating more than {summary.rows * 2} rows may reduce quality. We'll automatically cap at {summary.rows * 2} for best results.
+                  </p>
+                </div>
+              )}
             </div>
 
             <button
@@ -321,16 +328,27 @@ export default function Home() {
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-3">
               <div className="bg-gray-800 rounded-xl p-4 text-center">
-                <p className="text-gray-400 text-sm">Rows Generated</p>
-                <p className="text-white text-2xl font-bold">{result.rows_generated}</p>
+                <p className="text-gray-400 text-xs">Rows Generated</p>
+                <p className="text-white text-xl font-bold">{result.rows_generated}</p>
               </div>
               <div className="bg-gray-800 rounded-xl p-4 text-center">
-                <p className="text-gray-400 text-sm">Fixes Applied</p>
-                <p className="text-white text-2xl font-bold">{approvedCount}</p>
+                <p className="text-gray-400 text-xs">Fixes Applied</p>
+                <p className="text-white text-xl font-bold">{approvedCount}</p>
+              </div>
+              <div className="bg-gray-800 rounded-xl p-4 text-center">
+                <p className="text-gray-400 text-xs">Model Used</p>
+                <p className="text-violet-400 text-xs font-bold mt-1">{result.model_used}</p>
               </div>
             </div>
+            {result.capped && (
+              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3">
+                <p className="text-yellow-400 text-xs">
+                  ⚠️ Row count was capped at {result.max_recommended} (2× your real data) to maintain quality.
+                </p>
+              </div>
+            )}
 
             <button
               onClick={handleDownload}
