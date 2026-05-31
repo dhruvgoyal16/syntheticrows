@@ -177,8 +177,8 @@ def detect_imbalance(df: pd.DataFrame, target_col: str = None) -> Tuple[bool, fl
 
     counts = df[check_col].value_counts(normalize=True)
     ratio = round(float(counts.iloc[0]), 3)
-    return ratio > 0.80, ratio
-
+    # 60/40 split or worse is considered imbalanced for ML purposes
+    return ratio > 0.60, ratio
 
 # ─── Size Category ─────────────────────────────────────────────────────────────
 

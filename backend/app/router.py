@@ -24,6 +24,11 @@ def select_model(profile: DatasetProfile) -> tuple[ModelType, dict]:
     total_issues = sum(len(c.issues) for c in profile.columns)
     is_clean = total_issues == 0
 
+    # Imbalanced — always use CTGAN with conditional sampling
+    if profile.is_imbalanced:
+        epochs = 300 if num_rows < 2000 else 200
+        return ModelType.CTGAN, {"epochs": epochs, "conditional": True}
+
     # Tiny datasets — TVAE handles small data best
     if num_rows < 100:
         return ModelType.TVAE, {}

@@ -24,6 +24,39 @@ def build_synthesizer(model_type: ModelType, metadata: Metadata, kwargs: dict):
         return CTGANSynthesizer(metadata, epochs=200, verbose=False, cuda=False)
 
 
+def get_conditional_samples(
+    df: pd.DataFrame,
+    profile: DatasetProfile,
+    synthesizer,
+    num_rows: int
+) -> pd.DataFrame:
+    """
+    For imbalanced datasets, generate proportional samples per class
+    to preserve the original class distribution.
+    """
+    target_col = profile.target_column
+
+    if target_col is None or target_col not in df.columns:
+        return synthesizer.sample(num_rows=num_rows)
+
+    # Get original class distribution
+    class_counts = df[target_col].value_counts(normalize=True)
+    frames = []
+
+    for class_val, proportion in class_counts.items():
+        n = max(1, round(num_rows * proportion))
+        try:
+            condition = pd.DataFrame({target_col: [class_val] * n})
+            sample = synthesizer.sample_remaining_columns(condition)
+            frames.append(sample)
+        except Exception:
+            # Fallback to unconditional if conditional fails
+            sample = synthesizer.sample(num_rows=n)
+            frames.append(sample)
+
+    return pd.concat(frames, ignore_index=True)
+
+
 def generate(
     df: pd.DataFrame,
     profile: DatasetProfile,
@@ -38,6 +71,9 @@ def generate(
 
     model_type, model_kwargs = select_model(profile)
 
+    # Extract conditional flag before passing kwargs to synthesizer
+    use_conditional = model_kwargs.pop("conditional", False)
+
     # Detect and apply log transform for skewed columns
     skewed_cols = detect_skewed_columns(df)
     if skewed_cols:
@@ -49,7 +85,14 @@ def generate(
     synthesizer = build_synthesizer(model_type, metadata, model_kwargs)
 
     synthesizer.fit(df_transformed)
-    synthetic_transformed = synthesizer.sample(num_rows=num_rows)
+
+    # Use conditional sampling for imbalanced datasets
+    if use_conditional and profile.target_column:
+        synthetic_transformed = get_conditional_samples(
+            df_transformed, profile, synthesizer, num_rows
+        )
+    else:
+        synthetic_transformed = synthesizer.sample(num_rows=num_rows)
 
     # Reverse the log transform on synthetic data
     if skewed_cols:

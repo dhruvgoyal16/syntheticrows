@@ -65,7 +65,9 @@ async def analyse_csv(file: UploadFile = File(...)):
         "size_category": profile.size_category,
         "dataset_type": profile.dataset_type,
         "is_imbalanced": profile.is_imbalanced,
+        "imbalance_ratio": profile.imbalance_ratio,
         "has_datetime": profile.has_datetime,
+        "target_column": profile.target_column,
         "columns_to_drop": profile.columns_to_drop,
         "issues": all_issues,
         "issues_found": len(all_issues)
