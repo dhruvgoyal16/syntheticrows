@@ -87,20 +87,14 @@ Go to `http://localhost:3000` in your browser and upload a CSV file to get start
 ---
 
 ## How It Works
-Upload CSV
-↓
-Data Profiler — detects column types, issues, dataset type
-↓
-Smart Preprocessor — applies user-approved fixes
-↓
-Model Router — selects optimal generation model
-↓
-Generation Engine — trains model and generates synthetic rows
-↓
-Validator — scores output across three metrics
-↓
-Download synthetic CSV + Quality Report
----
+
+1. **Upload CSV** — drag and drop your dataset
+2. **Data Profiler** — detects column types, issues, and dataset type
+3. **Smart Preprocessor** — applies only your approved fixes
+4. **Model Router** — selects the optimal generation model automatically
+5. **Generation Engine** — trains the model and generates synthetic rows
+6. **Validator** — scores output across three quality metrics
+7. **Download** — get your synthetic CSV with a full quality report
 
 ## Realism Score
 
