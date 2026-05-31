@@ -1,6 +1,8 @@
 "use client"
 import { useState, useRef } from "react"
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
 const severityColor = {
   high: "border-red-500/50 bg-red-500/5",
   medium: "border-yellow-500/50 bg-yellow-500/5",
@@ -17,17 +19,76 @@ const scoreColor = {
   red: "text-red-400"
 }
 
+const ISSUE_EXPLANATIONS = {
+  fill_missing: (col) => ({
+    what: `${col} has missing values that could confuse the generation model.`,
+    impact: "Missing values cause the model to learn incomplete patterns, producing synthetic data with gaps or unrealistic distributions.",
+    action: "We'll fill these with the column median — a safe, statistically sound replacement that preserves the data's natural center."
+  }),
+  fix_zeros: (col) => ({
+    what: `${col} has an unusually high number of zeros that likely represent missing data, not actual zero values.`,
+    impact: "If left unfixed, the model will learn that zeros are common and generate them frequently — creating biologically or logically impossible values in your synthetic data.",
+    action: "We'll replace these zeros with the column median calculated from real non-zero values, preserving the true distribution."
+  }),
+  cap_outliers: (col) => ({
+    what: `${col} has extreme values that sit far outside the normal range of the data.`,
+    impact: "Outliers distort what the model learns as 'normal', causing it to occasionally generate unrealistic extreme values in synthetic rows.",
+    action: "We'll cap values at ±3 standard deviations — keeping the natural spread while removing values that would mislead the model."
+  }),
+  drop_column: (col) => ({
+    what: `${col} appears to be an ID, constant, or high-cardinality column with too many unique values to synthesize meaningfully.`,
+    impact: "Synthesizing ID or constant columns adds noise without value — the model wastes capacity learning patterns that don't exist.",
+    action: "We'll remove this column before generation. It will not appear in your synthetic dataset."
+  })
+}
+
+const SCORE_INTERPRETATION = (score, grade, stats) => {
+  const { distinguishability_score, statistical_score, coverage_score } = stats
+
+  let overall = ""
+  if (score >= 80) {
+    overall = "Your synthetic data is excellent. A model trained on this data should perform comparably to one trained on your real data. You can confidently use this for ML training, testing, and augmentation."
+  } else if (score >= 60) {
+    overall = "Your synthetic data is good and usable for most ML tasks. Some statistical patterns may differ slightly from your real data, but the overall distributions are well-preserved."
+  } else {
+    overall = "Your synthetic data is fair. Consider approving more data quality fixes before regenerating, or try with a cleaner dataset. The data can still be useful for prototyping."
+  }
+
+  let weakest = ""
+  if (distinguishability_score < 60) {
+    weakest = "The distinguishability score is low — a classifier can tell real from synthetic data. This usually means inter-column correlations aren't fully preserved. Try approving more fixes before regenerating."
+  } else if (statistical_score < 60) {
+    weakest = "The statistical similarity score is low — some column distributions differ significantly from your real data. Check the column report below to see which columns need attention."
+  } else if (coverage_score < 60) {
+    weakest = "The coverage score is low — synthetic data doesn't cover the full range of your real data. Try generating more rows to improve coverage."
+  }
+
+  return { overall, weakest }
+}
+
+const GENERATION_STAGES = [
+  { id: 1, label: "Profiling dataset", desc: "Analysing column types and relationships" },
+  { id: 2, label: "Applying fixes", desc: "Cleaning data based on your selections" },
+  { id: 3, label: "Training model", desc: "Learning patterns from your data" },
+  { id: 4, label: "Generating rows", desc: "Creating realistic synthetic samples" },
+  { id: 5, label: "Scoring quality", desc: "Evaluating realism across three metrics" },
+]
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
 export default function Home() {
   const [file, setFile] = useState(null)
   const [summary, setSummary] = useState(null)
   const [issues, setIssues] = useState([])
   const [fixes, setFixes] = useState([])
-  const [step, setStep] = useState("upload") // upload → analyse → quality → generate → result
+  const [step, setStep] = useState("upload")
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [generationStage, setGenerationStage] = useState(0)
   const [error, setError] = useState(null)
   const [numRows, setNumRows] = useState(300)
   const [result, setResult] = useState(null)
+  const [expandedIssue, setExpandedIssue] = useState(null)
   const inputRef = useRef(null)
 
   const handleFile = (selectedFile) => {
@@ -60,7 +121,6 @@ export default function Home() {
       const data = await res.json()
       setSummary(data)
 
-      // Default all fixes to approved
       const defaultFixes = data.issues.map((issue) => ({
         column: issue.column,
         issue: issue.issue,
@@ -71,7 +131,7 @@ export default function Home() {
       setFixes(defaultFixes)
       setStep(data.issues.length > 0 ? "quality" : "generate")
     } catch (err) {
-      setError("Could not connect to backend. Is it running?")
+      setError("Could not connect to backend. Make sure the backend server is running.")
     } finally {
       setLoading(false)
     }
@@ -83,10 +143,21 @@ export default function Home() {
     )
   }
 
+  const simulateStages = () => {
+    const timings = [800, 1500, 4000, 3000, 2000]
+    let cumulative = 0
+    timings.forEach((delay, i) => {
+      cumulative += delay
+      setTimeout(() => setGenerationStage(i + 1), cumulative)
+    })
+  }
+
   const handleGenerate = async () => {
     if (!file) return
     setGenerating(true)
     setError(null)
+    setGenerationStage(0)
+    simulateStages()
 
     const formData = new FormData()
     formData.append("file", file)
@@ -108,9 +179,14 @@ export default function Home() {
       setStep("result")
 
     } catch (err) {
-      setError(err.message || "Generation failed. Please try again.")
+      setError(
+        err.message?.includes("500")
+          ? "Generation failed. Your dataset may have unsupported column types. Try approving more fixes and regenerating."
+          : err.message || "Something went wrong. Please try again."
+      )
     } finally {
       setGenerating(false)
+      setGenerationStage(0)
     }
   }
 
@@ -126,6 +202,19 @@ export default function Home() {
   }
 
   const approvedCount = fixes.filter(f => f.approved).length
+
+  const previewRows = result?.csv_data
+    ? (() => {
+        const lines = result.csv_data.trim().split("\n")
+        const headers = lines[0].split(",")
+        const rows = lines.slice(1, 6).map(line => line.split(","))
+        return { headers, rows }
+      })()
+    : null
+
+  const interpretation = result
+    ? SCORE_INTERPRETATION(result.realism_score, result.grade, result)
+    : null
 
   return (
     <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center px-4 py-16">
@@ -164,15 +253,16 @@ export default function Home() {
 
       <div className="w-full max-w-lg space-y-4">
 
-        {/* Upload Box — always visible */}
+        {/* Upload Box */}
         <div
-          onClick={() => inputRef.current.click()}
+          onClick={() => !generating && inputRef.current.click()}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault()
             handleFile(e.dataTransfer.files[0])
           }}
-          className="border-2 border-dashed border-violet-500 rounded-2xl p-10 text-center cursor-pointer hover:bg-violet-500/5 transition-all"
+          className={`border-2 border-dashed rounded-2xl p-10 text-center transition-all
+            ${generating ? "border-gray-700 cursor-not-allowed opacity-50" : "border-violet-500 cursor-pointer hover:bg-violet-500/5"}`}
         >
           <p className="text-4xl mb-4">📂</p>
           {file ? (
@@ -193,7 +283,11 @@ export default function Home() {
         </div>
 
         {/* Error */}
-        {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+        {error && (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4">
+            <p className="text-red-400 text-sm">{error}</p>
+          </div>
+        )}
 
         {/* Analyse Button */}
         {file && step === "upload" && (
@@ -206,6 +300,23 @@ export default function Home() {
           </button>
         )}
 
+        {/* Dataset Info Banner */}
+        {summary && step !== "upload" && (
+          <div className="bg-gray-900 rounded-xl p-4 flex items-center justify-between">
+            <div>
+              <p className="text-white text-sm font-semibold">{summary.filename}</p>
+              <p className="text-gray-500 text-xs mt-0.5">
+                {summary.rows} rows · {summary.columns} columns · {summary.size_category}
+                {summary.is_imbalanced && <span className="text-yellow-400 ml-2">⚠ Imbalanced</span>}
+                {summary.has_datetime && <span className="text-blue-400 ml-2">📅 Time series</span>}
+              </p>
+            </div>
+            <span className="text-violet-400 text-xs bg-violet-500/10 px-3 py-1 rounded-full">
+              {summary.dataset_type}
+            </span>
+          </div>
+        )}
+
         {/* Data Quality Report */}
         {step === "quality" && issues.length > 0 && (
           <div className="bg-gray-900 rounded-2xl p-6">
@@ -216,40 +327,77 @@ export default function Home() {
               </span>
             </div>
             <p className="text-gray-500 text-sm mb-4">
-              We found {issues.length} potential issues. Toggle to approve or skip each fix.
+              We found {issues.length} potential issues in your dataset. Review each one and toggle to approve or skip the fix.
             </p>
 
             <div className="space-y-3 mb-6">
-              {issues.map((issue, i) => (
-                <div
-                  key={i}
-                  className={`border rounded-xl p-4 transition-all ${fixes[i]?.approved
-                    ? severityColor[issue.severity]
-                    : "border-gray-700 bg-gray-800/50 opacity-50"
-                    }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-white font-semibold text-sm">{issue.column}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${severityBadge[issue.severity]}`}>
-                          {issue.severity}
-                        </span>
+              {issues.map((issue, i) => {
+                const explanation = ISSUE_EXPLANATIONS[issue.fix_type]?.(issue.column)
+                const isExpanded = expandedIssue === i
+
+                return (
+                  <div
+                    key={i}
+                    className={`border rounded-xl p-4 transition-all ${fixes[i]?.approved
+                      ? severityColor[issue.severity]
+                      : "border-gray-700 bg-gray-800/50 opacity-60"
+                      }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-white font-semibold text-sm">{issue.column}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${severityBadge[issue.severity]}`}>
+                            {issue.severity}
+                          </span>
+                        </div>
+                        <p className="text-gray-400 text-xs">{issue.issue}</p>
+
+                        {/* Explanation */}
+                        {explanation && (
+                          <div className="mt-2">
+                            <button
+                              onClick={() => setExpandedIssue(isExpanded ? null : i)}
+                              className="text-violet-400 text-xs hover:text-violet-300 transition-colors"
+                            >
+                              {isExpanded ? "▼ Hide explanation" : "▶ Why does this matter?"}
+                            </button>
+
+                            {isExpanded && (
+                              <div className="mt-2 space-y-2">
+                                <div className="bg-gray-900/50 rounded-lg p-3">
+                                  <p className="text-gray-300 text-xs font-semibold mb-1">🔍 What we found</p>
+                                  <p className="text-gray-400 text-xs">{explanation.what}</p>
+                                </div>
+                                <div className="bg-red-500/5 rounded-lg p-3">
+                                  <p className="text-red-400 text-xs font-semibold mb-1">⚠ Impact if ignored</p>
+                                  <p className="text-gray-400 text-xs">{explanation.impact}</p>
+                                </div>
+                                <div className="bg-green-500/5 rounded-lg p-3">
+                                  <p className="text-green-400 text-xs font-semibold mb-1">✓ What we'll do</p>
+                                  <p className="text-gray-400 text-xs">{explanation.action}</p>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        <p className="text-gray-600 text-xs mt-2">
+                          Fix: {issue.recommendation}
+                        </p>
                       </div>
-                      <p className="text-gray-400 text-xs">{issue.issue}</p>
-                      <p className="text-gray-500 text-xs mt-1">
-                        Fix: {issue.recommendation}
-                      </p>
+
+                      {/* Toggle */}
+                      <button
+                        onClick={() => toggleFix(i)}
+                        className={`shrink-0 w-10 h-6 rounded-full transition-all ${fixes[i]?.approved ? "bg-violet-600" : "bg-gray-700"}`}
+                      >
+                        <div className={`w-4 h-4 bg-white rounded-full mx-auto transition-all ${fixes[i]?.approved ? "translate-x-2" : "-translate-x-2"}`} />
+                      </button>
                     </div>
-                    <button
-                      onClick={() => toggleFix(i)}
-                      className={`shrink-0 w-10 h-6 rounded-full transition-all ${fixes[i]?.approved ? "bg-violet-600" : "bg-gray-700"}`}
-                    >
-                      <div className={`w-4 h-4 bg-white rounded-full mx-auto transition-all ${fixes[i]?.approved ? "translate-x-2" : "-translate-x-2"}`} />
-                    </button>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
 
             <button
@@ -274,6 +422,15 @@ export default function Home() {
               </div>
             )}
 
+            {summary?.is_imbalanced && (
+              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3 mb-4">
+                <p className="text-yellow-300 text-sm font-semibold">⚠ Imbalanced dataset detected</p>
+                <p className="text-yellow-400/70 text-xs mt-1">
+                  We detected a class imbalance ({Math.round(summary.imbalance_ratio * 100)}% / {Math.round((1 - summary.imbalance_ratio) * 100)}%). SynthIQ will automatically preserve this ratio in your synthetic data using conditional generation — so your model trains on correctly distributed data.
+                </p>
+              </div>
+            )}
+
             <div className="mb-6">
               <label className="text-gray-400 text-sm block mb-2">
                 Rows to generate: <span className="text-white font-bold">{numRows}</span>
@@ -294,18 +451,47 @@ export default function Home() {
               {summary && numRows > summary.rows * 2 && (
                 <div className="mt-3 bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3">
                   <p className="text-yellow-400 text-xs">
-                    ⚠️ Your dataset has {summary.rows} rows. Generating more than {summary.rows * 2} rows may reduce quality. We'll automatically cap at {summary.rows * 2} for best results.
+                    ⚠ Your dataset has {summary.rows} rows. Generating more than {summary.rows * 2} rows may reduce quality. We'll automatically cap at {summary.rows * 2} for best results.
                   </p>
                 </div>
               )}
             </div>
+
+            {/* Progress Indicator */}
+            {generating && (
+              <div className="bg-gray-800 rounded-xl p-4 mb-4">
+                <p className="text-violet-400 text-sm font-semibold mb-3">Generating your dataset...</p>
+                <div className="space-y-2">
+                  {GENERATION_STAGES.map((stage) => {
+                    const isDone = generationStage > stage.id
+                    const isActive = generationStage === stage.id
+                    return (
+                      <div key={stage.id} className="flex items-center gap-3">
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0
+                          ${isDone ? "bg-green-500" : isActive ? "bg-violet-500 animate-pulse" : "bg-gray-700"}`}>
+                          {isDone ? "✓" : isActive ? "●" : "○"}
+                        </div>
+                        <div>
+                          <p className={`text-xs font-semibold ${isDone ? "text-green-400" : isActive ? "text-white" : "text-gray-600"}`}>
+                            {stage.label}
+                          </p>
+                          {isActive && (
+                            <p className="text-gray-500 text-xs">{stage.desc}</p>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
 
             <button
               onClick={handleGenerate}
               disabled={generating}
               className="w-full bg-violet-600 hover:bg-violet-700 text-white font-semibold px-8 py-3 rounded-xl transition-all disabled:opacity-50"
             >
-              {generating ? "Generating... (this takes ~2 mins)" : "⚡ Generate Synthetic Dataset"}
+              {generating ? "Generating..." : "⚡ Generate Synthetic Dataset"}
             </button>
           </div>
         )}
@@ -324,20 +510,54 @@ export default function Home() {
               <p className={`text-sm font-semibold mt-1 ${scoreColor[result.color]}`}>
                 {result.grade}
               </p>
-              <p className="text-gray-600 text-xs mt-3">
-                Weighted average of three quality metrics below
-              </p>
+              {interpretation && (
+                <p className="text-gray-400 text-xs mt-3 text-left leading-relaxed">
+                  {interpretation.overall}
+                </p>
+              )}
+              {interpretation?.weakest && (
+                <p className="text-yellow-400 text-xs mt-2 text-left leading-relaxed">
+                  💡 {interpretation.weakest}
+                </p>
+              )}
             </div>
 
             {/* Three Sub-scores */}
             <div className="bg-gray-800 rounded-xl p-4 space-y-3">
               <p className="text-gray-400 text-xs font-semibold uppercase tracking-wide">Score Breakdown</p>
-
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {[
-                  { label: "Distinguishability", value: result.distinguishability_score, desc: "Can a classifier tell real from synthetic?", weight: "20%" },
-                  { label: "Statistical Similarity", value: result.statistical_score, desc: "Do distributions match column by column?", weight: "50%" },
-                  { label: "Coverage", value: result.coverage_score, desc: "Does synthetic data cover the full data range?", weight: "30%" }
+                  {
+                    label: "Statistical Similarity",
+                    value: result.statistical_score,
+                    desc: "Do column distributions match your real data?",
+                    weight: "50%",
+                    interpretation: result.statistical_score >= 80
+                      ? "Column distributions closely match your real data."
+                      : result.statistical_score >= 60
+                      ? "Most distributions match but some columns differ."
+                      : "Several column distributions differ significantly."
+                  },
+                  {
+                    label: "Coverage",
+                    value: result.coverage_score,
+                    desc: "Does synthetic data cover the full value range?",
+                    weight: "30%",
+                    interpretation: result.coverage_score >= 80
+                      ? "Synthetic data covers the full range of real values."
+                      : "Some value ranges from real data aren't fully covered."
+                  },
+                  {
+                    label: "Distinguishability",
+                    value: result.distinguishability_score,
+                    desc: "Can a classifier tell real from synthetic?",
+                    weight: "20%",
+                    interpretation: result.distinguishability_score >= 80
+                      ? "A classifier cannot reliably distinguish synthetic from real."
+                      : result.distinguishability_score >= 60
+                      ? "Some patterns differ but data is still usable."
+                      : "Inter-column correlations could be stronger."
+                  }
                 ].map((metric) => (
                   <div key={metric.label}>
                     <div className="flex justify-between items-center mb-1">
@@ -352,14 +572,14 @@ export default function Home() {
                     </div>
                     <div className="w-full bg-gray-700 rounded-full h-1.5">
                       <div
-                        className={`h-1.5 rounded-full transition-all ${
+                        className={`h-1.5 rounded-full ${
                           metric.value >= 80 ? "bg-green-400" :
                           metric.value >= 60 ? "bg-yellow-400" : "bg-red-400"
                         }`}
                         style={{ width: `${metric.value}%` }}
                       />
                     </div>
-                    <p className="text-gray-600 text-xs mt-0.5">{metric.desc}</p>
+                    <p className="text-gray-600 text-xs mt-1">{metric.interpretation}</p>
                   </div>
                 ))}
               </div>
@@ -389,7 +609,9 @@ export default function Home() {
                           col.grade === "Excellent" ? "text-green-400" :
                           col.grade === "Good" ? "text-yellow-400" :
                           col.grade === "Fair" ? "text-orange-400" : "text-red-400"
-                        }`}>{col.grade === "Excellent" ? "✓" : col.grade === "Good" ? "~" : "!"}</span>
+                        }`}>
+                          {col.grade === "Excellent" ? "✓" : col.grade === "Good" ? "~" : "!"}
+                        </span>
                         <span className="text-gray-500 text-xs w-8 text-right">{col.score}</span>
                       </div>
                     </div>
@@ -399,6 +621,39 @@ export default function Home() {
                   <span className="text-green-400 text-xs">✓ Excellent (80+)</span>
                   <span className="text-yellow-400 text-xs">~ Good (60+)</span>
                   <span className="text-orange-400 text-xs">! Fair/Poor</span>
+                </div>
+              </div>
+            )}
+
+            {/* Dataset Preview */}
+            {previewRows && (
+              <div className="bg-gray-800 rounded-xl p-4">
+                <p className="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-3">
+                  Synthetic Data Preview (first 5 rows)
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr>
+                        {previewRows.headers.map((h) => (
+                          <th key={h} className="text-gray-500 font-semibold pb-2 pr-3 text-left whitespace-nowrap">
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewRows.rows.map((row, i) => (
+                        <tr key={i} className="border-t border-gray-700">
+                          {row.map((cell, j) => (
+                            <td key={j} className="text-gray-300 py-1.5 pr-3 whitespace-nowrap">
+                              {cell}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
@@ -419,11 +674,10 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Capped warning */}
             {result.capped && (
               <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3">
                 <p className="text-yellow-400 text-xs">
-                  ⚠️ Row count was capped at {result.max_recommended} (2× your real data) to maintain quality.
+                  ⚠ Row count was capped at {result.max_recommended} (2× your real data) to maintain quality.
                 </p>
               </div>
             )}
