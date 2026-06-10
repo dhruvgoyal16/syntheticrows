@@ -185,6 +185,7 @@ export default function Home() {
   const [distributions, setDistributions] = useState(null)      // ← here
   const [showDistributions, setShowDistributions] = useState(false)  // ← here
   const [classRatios, setClassRatios] = useState({})
+  const [history, setHistory] = useState([])
   const inputRef = useRef(null)
 
   const handleFile = (selectedFile) => {
@@ -283,6 +284,18 @@ export default function Home() {
       const data = await res.json()
       setResult(data)
       setStep("result")
+      setHistory(prev => [{
+        id: Date.now(),
+        filename: file.name,
+        rows_generated: data.rows_generated,
+        realism_score: data.realism_score,
+        grade: data.grade,
+        color: data.color,
+        model_used: data.model_used,
+        fixes_applied: approvedCount,
+        csv_data: data.csv_data,
+        timestamp: new Date().toLocaleTimeString()
+      }, ...prev].slice(0, 5)) // keep last 5
 
        // Set distributions from generation response
       if (data.distributions) {
@@ -1074,7 +1087,50 @@ export default function Home() {
         )}
 
       </div>
-
+      {/* Generation History */}
+      {history.length > 0 && (
+        <div className="w-full max-w-lg mt-8">
+          <p className="text-gray-500 text-xs font-semibold uppercase tracking-wide mb-3">
+            Session History
+          </p>
+          <div className="space-y-2">
+            {history.map((item) => (
+              <div key={item.id} className="bg-gray-900 rounded-xl p-4 flex items-center justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-white text-xs font-semibold truncate">{item.filename}</p>
+                    <span className={`text-xs font-bold shrink-0 ${
+                      item.color === "green" ? "text-green-400" :
+                      item.color === "yellow" ? "text-yellow-400" : "text-red-400"
+                    }`}>{item.realism_score}</span>
+                    <span className={`text-xs shrink-0 ${
+                      item.color === "green" ? "text-green-400" :
+                      item.color === "yellow" ? "text-yellow-400" : "text-red-400"
+                    }`}>{item.grade}</span>
+                  </div>
+                  <p className="text-gray-500 text-xs">
+                    {item.rows_generated} rows · {item.model_used} · {item.fixes_applied} fixes · {item.timestamp}
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    const blob = new Blob([item.csv_data], { type: "text/csv" })
+                    const url = window.URL.createObjectURL(blob)
+                    const a = document.createElement("a")
+                    a.href = url
+                    a.download = `synthetic_${item.filename}`
+                    a.click()
+                    window.URL.revokeObjectURL(url)
+                  }}
+                  className="shrink-0 ml-3 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white text-xs px-3 py-1.5 rounded-lg transition-all"
+                >
+                  ⬇️
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <p className="text-gray-600 text-sm mt-8">
         Supports CSV files · Free up to 1000 rows
       </p>
