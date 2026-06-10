@@ -60,7 +60,8 @@ def get_conditional_samples(
 def generate(
     df: pd.DataFrame,
     profile: DatasetProfile,
-    num_rows: int
+    num_rows: int,
+    class_ratios: dict = {}
 ) -> tuple[pd.DataFrame, str]:
     """
     Returns (synthetic_df, model_name_used)
@@ -87,7 +88,58 @@ def generate(
     synthesizer.fit(df_transformed)
 
     # Use conditional sampling for imbalanced datasets
-    if use_conditional and profile.target_column:
+    # Use custom class ratios if provided
+    # Use custom class ratios if provided
+    # Use custom class ratios if provided
+    if class_ratios and profile.target_column and profile.target_column in df.columns:
+        frames = []
+
+        for class_val, count in class_ratios.items():
+            try:
+                col_dtype = df[profile.target_column].dtype
+                if np.issubdtype(col_dtype, np.integer):
+                    class_val_typed = int(class_val)
+                elif np.issubdtype(col_dtype, np.floating):
+                    class_val_typed = float(class_val)
+                else:
+                    class_val_typed = class_val
+
+                n = int(count)
+
+                # Filter training data to this class only
+                class_df = df_transformed[
+                    df_transformed[profile.target_column] == class_val_typed
+                ]
+
+                if len(class_df) < 10:
+                    # Not enough data for this class — skip
+                    continue
+
+                # Train a separate synthesizer on this class
+                class_metadata = Metadata.detect_from_dataframe(class_df)
+                class_synthesizer = build_synthesizer(model_type, class_metadata, model_kwargs.copy())
+                class_synthesizer.fit(class_df)
+
+                # Generate n rows for this class
+                class_synthetic = class_synthesizer.sample(num_rows=n)
+
+                # Ensure the target column has the correct value
+                class_synthetic[profile.target_column] = class_val_typed
+
+                frames.append(class_synthetic)
+
+            except Exception as e:
+                print(f"Conditional generation failed for class {class_val}: {e}")
+                continue
+
+        if frames:
+            synthetic_transformed = pd.concat(frames, ignore_index=True)
+        else:
+            # Fallback to normal generation
+            synthetic_transformed = synthesizer.sample(num_rows=num_rows)
+            
+    # Use conditional sampling for imbalanced datasets
+    elif use_conditional and profile.target_column:
         synthetic_transformed = get_conditional_samples(
             df_transformed, profile, synthesizer, num_rows
         )

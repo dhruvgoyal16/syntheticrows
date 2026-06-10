@@ -184,6 +184,7 @@ export default function Home() {
   const [expandedIssue, setExpandedIssue] = useState(null)
   const [distributions, setDistributions] = useState(null)      // ← here
   const [showDistributions, setShowDistributions] = useState(false)  // ← here
+  const [classRatios, setClassRatios] = useState({})
   const inputRef = useRef(null)
 
   const handleFile = (selectedFile) => {
@@ -258,8 +259,18 @@ export default function Home() {
     formData.append("file", file)
     formData.append("fixes", JSON.stringify(fixes))
 
+    // Only send class ratios if user has filled them in
+    console.log("classRatios state:", classRatios)
+    const activeRatios = Object.fromEntries(
+      Object.entries(classRatios).filter(([_, v]) => v !== undefined && v > 0)
+    )
+    console.log("activeRatios:", activeRatios)
+    const ratiosParam = Object.keys(activeRatios).length > 0
+    ? `&class_ratios=${encodeURIComponent(JSON.stringify(activeRatios))}`
+    : ""
+
     try {
-      const res = await fetch(`http://localhost:8000/generate-with-score?num_rows=${numRows}`, {
+      const res = await fetch(`http://localhost:8000/generate-with-score?num_rows=${numRows}${ratiosParam}`, {
         method: "POST",
         body: formData,
       })
@@ -531,7 +542,47 @@ export default function Home() {
                 </p>
               </div>
             )}
-
+{/* Conditional Generation */}
+            {summary?.target_column && (
+              <div className="bg-gray-800/50 rounded-xl p-4 mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-white text-sm font-semibold">Class Distribution</p>
+                  <button
+                    onClick={() => setClassRatios({})}
+                    className="text-gray-500 text-xs hover:text-gray-400"
+                  >
+                    Reset to natural
+                  </button>
+                </div>
+                <p className="text-gray-500 text-xs mb-3">
+                  Customize how many rows to generate per class in <span className="text-violet-400">{summary.target_column}</span>.
+                  Leave blank to use the natural distribution.
+                </p>
+                <div className="space-y-2">
+                  {[...new Set([0, 1])].map((classVal) => (
+                    <div key={classVal} className="flex items-center gap-3">
+                      <span className="text-gray-400 text-xs w-16">Class {classVal}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="500"
+                        placeholder={`e.g. ${Math.round(numRows * (classVal === 0 ? 0.5 : 0.5))}`}
+                        value={classRatios[classVal] || ""}
+                        onChange={(e) => {
+                          const val = e.target.value
+                          setClassRatios(prev => ({
+                            ...prev,
+                            [classVal]: val === "" ? undefined : parseInt(val)
+                          }))
+                        }}
+                        className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-1.5 text-white text-xs focus:outline-none focus:border-violet-500"
+                      />
+                      <span className="text-gray-600 text-xs">rows</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="mb-6">
               <label className="text-gray-400 text-sm block mb-2">
                 Rows to generate: <span className="text-white font-bold">{numRows}</span>
@@ -778,7 +829,7 @@ export default function Home() {
                 </div>
               </div>
             )}
-            
+
 {/* Distribution Plots */}
             {distributions && distributions.length > 0 && (
               <div className="bg-gray-800 rounded-xl p-4">
@@ -1011,6 +1062,8 @@ export default function Home() {
                 setIssues([])
                 setFixes([])
                 setResult(null)
+                setDistributions(null)
+                setClassRatios({})
                 setStep("upload")
               }}
               className="w-full bg-gray-800 hover:bg-gray-700 text-gray-400 font-semibold px-8 py-3 rounded-xl transition-all"

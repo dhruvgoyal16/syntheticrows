@@ -256,7 +256,8 @@ async def get_distributions(
 async def generate_with_score(
     file: UploadFile = File(...),
     num_rows: int = 500,
-    fixes: str = "[]"
+    fixes: str = "[]",
+    class_ratios: str = "{}"
 ):
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are allowed")
@@ -284,11 +285,20 @@ async def generate_with_score(
     except Exception:
         cleaned_df = real_df
 
-    # Auto preprocess (drop IDs, handle datetime, rare categories)
+    # Auto preprocess
     cleaned_df = auto_preprocess(cleaned_df, profile)
 
     try:
-        synthetic_df, model_used = generate(cleaned_df, profile, num_rows)
+        # Parse custom class ratios if provided
+        try:
+            parsed_ratios = json.loads(class_ratios)
+        except Exception:
+            parsed_ratios = {}
+            
+        print("DEBUG class_ratios received:", class_ratios)
+        print("DEBUG parsed_ratios:", parsed_ratios)
+
+        synthetic_df, model_used = generate(cleaned_df, profile, num_rows, parsed_ratios)
         result = validate(cleaned_df, synthetic_df, profile.target_column)
 
         output = io.StringIO()
@@ -313,4 +323,6 @@ async def generate_with_score(
         }
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
