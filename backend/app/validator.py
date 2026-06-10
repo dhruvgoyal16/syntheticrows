@@ -4,7 +4,10 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score
 from .models import ValidationResult, ColumnQuality
-
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score
 
 def distinguishability_score(real_df: pd.DataFrame, synthetic_df: pd.DataFrame) -> float:
     real_num = real_df.select_dtypes(include=[np.number])
@@ -132,14 +135,121 @@ def column_quality_report(real_df: pd.DataFrame, synthetic_df: pd.DataFrame):
 
     return sorted(report, key=lambda x: x.score, reverse=True)
 
+def tstr_validation(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, target_col: str = None) -> dict:
+    """
+    Train on Synthetic, Test on Real validation.
+    Compares a model trained on synthetic data vs one trained on real data,
+    both tested on held-out real data.
+    """
+    # Find target column if not provided
+    if target_col is None:
+        target_keywords = ["target", "label", "class", "outcome", "y", "output", "result"]
+        for col in real_df.columns:
+            if col.lower() in target_keywords:
+                target_col = col
+                break
 
-def validate(real_df: pd.DataFrame, synthetic_df: pd.DataFrame) -> ValidationResult:
+    # Fall back to last binary column
+    if target_col is None:
+        for col in real_df.columns:
+            if real_df[col].nunique() == 2:
+                target_col = col
+                break
+
+    # Can't run TSTR without a target
+    if target_col is None or target_col not in real_df.columns:
+        return {"available": False, "reason": "No target column detected for TSTR validation"}
+
+    try:
+        # Prepare real data
+        real_numeric = real_df.select_dtypes(include=[np.number])
+        if target_col not in real_numeric.columns:
+            return {"available": False, "reason": "Target column is not numeric"}
+
+        feature_cols = [c for c in real_numeric.columns if c != target_col]
+        if len(feature_cols) == 0:
+            return {"available": False, "reason": "No feature columns found"}
+
+        X_real = real_numeric[feature_cols].fillna(0)
+        y_real = real_numeric[target_col]
+
+        # Split real data into train and test
+        X_real_train, X_real_test, y_real_train, y_real_test = train_test_split(
+            X_real, y_real, test_size=0.3, random_state=42, stratify=y_real
+        )
+
+        # Prepare synthetic data
+        synth_numeric = synthetic_df.select_dtypes(include=[np.number])
+        common_features = [c for c in feature_cols if c in synth_numeric.columns]
+
+        if len(common_features) == 0:
+            return {"available": False, "reason": "No matching feature columns in synthetic data"}
+
+        X_synth = synth_numeric[common_features].fillna(0)
+        y_synth = synth_numeric[target_col] if target_col in synth_numeric.columns else None
+
+        if y_synth is None:
+            return {"available": False, "reason": "Target column missing from synthetic data"}
+
+        # Train on REAL, test on REAL (baseline)
+        clf_real = RandomForestClassifier(n_estimators=50, random_state=42)
+        clf_real.fit(X_real_train[common_features], y_real_train)
+        real_real_acc = round(accuracy_score(y_real_test, clf_real.predict(X_real_test[common_features])) * 100, 1)
+
+        # Train on SYNTHETIC, test on REAL (TSTR)
+        clf_synth = RandomForestClassifier(n_estimators=50, random_state=42)
+        clf_synth.fit(X_synth, y_synth)
+        synth_real_acc = round(accuracy_score(y_real_test, clf_synth.predict(X_real_test[common_features])) * 100, 1)
+
+        # Calculate performance gap
+        gap = round(real_real_acc - synth_real_acc, 1)
+        gap_pct = round((gap / real_real_acc) * 100, 1) if real_real_acc > 0 else 0
+
+        # Grade the gap
+        # Grade the gap
+        if gap_pct <= 5:
+            tstr_grade = "Excellent"
+            tstr_color = "green"
+            interpretation = f"Outstanding result. A model trained on your synthetic data performs nearly identically to one trained on real data — only a {gap}% accuracy gap. Your synthetic data is production-ready and can fully replace real data for ML training."
+        elif gap_pct <= 10:
+            tstr_grade = "Excellent"
+            tstr_color = "green"
+            interpretation = f"Strong result. Your synthetic data produces a model that performs very close to one trained on real data — only a {gap}% accuracy gap. Your synthetic data is ready for ML training and most production use cases."
+        elif gap_pct <= 20:
+            tstr_grade = "Good"
+            tstr_color = "yellow"
+            interpretation = f"Good result. Your synthetic data produces a model with a {gap}% accuracy gap compared to real data. This is acceptable for training, augmentation, and testing. Consider approving more data quality fixes to further close the gap."
+        elif gap_pct <= 35:
+            tstr_grade = "Fair"
+            tstr_color = "yellow"
+            interpretation = f"Moderate result. There is a {gap}% accuracy gap between models trained on synthetic vs real data. Your synthetic data can be used for initial experimentation. Approve more quality fixes and regenerate to improve ML readiness."
+        else:
+            tstr_grade = "Poor"
+            tstr_color = "red"
+            interpretation = f"The {gap}% accuracy gap suggests your synthetic data needs improvement before use in ML training. Review and approve all recommended data quality fixes, then regenerate for better results."
+        return {
+            "available": True,
+            "target_column": target_col,
+            "real_real_accuracy": real_real_acc,
+            "synth_real_accuracy": synth_real_acc,
+            "performance_gap": gap,
+            "performance_gap_pct": gap_pct,
+            "grade": tstr_grade,
+            "color": tstr_color,
+            "interpretation": interpretation
+        }
+
+    except Exception as e:
+        return {"available": False, "reason": f"TSTR validation failed: {str(e)}"}
+    
+def validate(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, target_col: str = None) -> ValidationResult:
     d_score = distinguishability_score(real_df, synthetic_df)
     s_score = statistical_similarity_score(real_df, synthetic_df)
     c_score = coverage_score(real_df, synthetic_df)
 
     # Weighted final score
     final = round(d_score * 0.2 + s_score * 0.5 + c_score * 0.3, 1)
+
     if final >= 80:
         grade = "Excellent"
         color = "green"
@@ -151,6 +261,7 @@ def validate(real_df: pd.DataFrame, synthetic_df: pd.DataFrame) -> ValidationRes
         color = "red"
 
     col_quality = column_quality_report(real_df, synthetic_df)
+    tstr = tstr_validation(real_df, synthetic_df, target_col)
 
     return ValidationResult(
         distinguishability_score=d_score,
@@ -159,5 +270,6 @@ def validate(real_df: pd.DataFrame, synthetic_df: pd.DataFrame) -> ValidationRes
         final_score=final,
         grade=grade,
         color=color,
-        column_quality=col_quality
+        column_quality=col_quality,
+        tstr=tstr
     )

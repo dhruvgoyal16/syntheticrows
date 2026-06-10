@@ -584,7 +584,60 @@ export default function Home() {
                 ))}
               </div>
             </div>
+{/* TSTR Validation */}
+            {result.tstr?.available && (
+              <div className="bg-gray-800 rounded-xl p-4">
+                <p className="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-3">
+                  ML Readiness — Train on Synthetic, Test on Real
+                </p>
 
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  <div className="bg-gray-700 rounded-xl p-3 text-center">
+                    <p className="text-gray-400 text-xs mb-1">Real → Real (baseline)</p>
+                    <p className="text-white text-xl font-bold">{result.tstr.real_real_accuracy}%</p>
+                    <p className="text-gray-500 text-xs">trained on real data</p>
+                  </div>
+                  <div className="bg-gray-700 rounded-xl p-3 text-center">
+                    <p className="text-gray-400 text-xs mb-1">Synthetic → Real</p>
+                    <p className={`text-xl font-bold ${
+                      result.tstr.color === "green" ? "text-green-400" :
+                      result.tstr.color === "yellow" ? "text-yellow-400" : "text-red-400"
+                    }`}>{result.tstr.synth_real_accuracy}%</p>
+                    <p className="text-gray-500 text-xs">trained on synthetic</p>
+                  </div>
+                </div>
+
+                <div className={`rounded-xl p-3 mb-3 ${
+                  result.tstr.color === "green" ? "bg-green-500/10 border border-green-500/30" :
+                  result.tstr.color === "yellow" ? "bg-yellow-500/10 border border-yellow-500/30" :
+                  "bg-red-500/10 border border-red-500/30"
+                }`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <p className={`text-xs font-semibold ${
+                      result.tstr.color === "green" ? "text-green-400" :
+                      result.tstr.color === "yellow" ? "text-yellow-400" : "text-red-400"
+                    }`}>
+                      Performance Gap: {result.tstr.performance_gap}% — {result.tstr.grade}
+                    </p>
+                  </div>
+                  <p className="text-gray-400 text-xs leading-relaxed">
+                    {result.tstr.interpretation}
+                  </p>
+                </div>
+
+                <p className="text-gray-600 text-xs">
+                  Target column: <span className="text-gray-400">{result.tstr.target_column}</span>
+                </p>
+              </div>
+            )}
+
+            {!result.tstr?.available && result.tstr?.reason && (
+              <div className="bg-gray-800 rounded-xl p-4">
+                <p className="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-1">ML Readiness</p>
+                <p className="text-gray-600 text-xs">{result.tstr.reason}</p>
+              </div>
+            )}
+            
             {/* Column Quality Report */}
             {result.column_quality && result.column_quality.length > 0 && (
               <div className="bg-gray-800 rounded-xl p-4">

@@ -111,7 +111,7 @@ async def generate_with_score(
 
     try:
         synthetic_df, model_used = generate(cleaned_df, profile, num_rows)
-        result = validate(cleaned_df, synthetic_df)
+        result = validate(cleaned_df, synthetic_df, profile.target_column)
 
         output = io.StringIO()
         synthetic_df.to_csv(output, index=False)
@@ -128,6 +128,7 @@ async def generate_with_score(
             "capped": capped,
             "max_recommended": max_recommended,
             "column_quality": [cq.dict() for cq in result.column_quality],
+            "tstr": result.tstr,
             "csv_data": output.getvalue()
         }
 

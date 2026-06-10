@@ -3,13 +3,13 @@ import numpy as np
 import random
 from .models import ModelType, DatasetProfile
 from .router import select_model
-from .preprocessor import detect_skewed_columns, log_transform, reverse_log_transform, restore_dtypes
 from sdv.metadata import Metadata
 from sdv.single_table import (
     GaussianCopulaSynthesizer,
     CTGANSynthesizer,
     TVAESynthesizer,
 )
+from .preprocessor import detect_skewed_columns, log_transform, reverse_log_transform, restore_dtypes, apply_domain_constraints
 
 
 def build_synthesizer(model_type: ModelType, metadata: Metadata, kwargs: dict):
@@ -101,6 +101,10 @@ def generate(
         synthetic_df = synthetic_transformed
 
     # Restore integer types and clip to original ranges
+    # Restore integer types and clip to original ranges
     synthetic_df = restore_dtypes(synthetic_df, df)
+
+    # Apply domain constraints
+    synthetic_df = apply_domain_constraints(synthetic_df, df)
 
     return synthetic_df, model_type.value

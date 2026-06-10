@@ -98,3 +98,4 @@ class ValidationResult(BaseModel):
     grade: str
     color: str
     column_quality: List[ColumnQuality]
+    tstr: Optional[dict] = None

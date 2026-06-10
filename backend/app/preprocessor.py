@@ -151,3 +151,84 @@ def auto_preprocess(df: pd.DataFrame, profile: DatasetProfile) -> pd.DataFrame:
                 df[col] = df[col].apply(lambda x: "Other" if x in rare else x)
 
     return df
+
+def apply_domain_constraints(synthetic_df: pd.DataFrame, real_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Enforce minimal, safe domain constraints on synthetic data.
+    Philosophy: only enforce what we know for certain.
+    Don't over-constrain — that hurts distributions more than it helps.
+    """
+    synthetic_df = synthetic_df.copy()
+
+    age_keywords = ["age", "years", "yr", "yrs"]
+    probability_keywords = ["probability", "prob", "ratio", "proportion", "fraction"]
+    positive_keywords = [
+        "price", "cost", "salary", "income", "revenue", "sales",
+        "amount", "fee", "wage", "spend", "budget"
+    ]
+    count_keywords = ["count", "quantity", "qty", "frequency", "occurrences"]
+
+    for col in synthetic_df.columns:
+        if col not in real_df.columns:
+            continue
+        if not pd.api.types.is_numeric_dtype(synthetic_df[col]):
+            continue
+
+        col_lower = col.lower()
+        real_col = real_df[col].dropna()
+        real_min = real_col.min()
+        real_max = real_col.max()
+        real_std = real_col.std() if real_col.std() > 0 else 1.0
+
+        # ── Rule 1: Binary/label columns — never touch ────────────────────────
+        is_binary = real_col.nunique() == 2
+        if is_binary:
+            synthetic_df[col] = synthetic_df[col].clip(lower=real_min, upper=real_max)
+            continue
+
+        # ── Rule 2: Columns where 0-1 range is the definition ─────────────────
+        if real_min >= 0 and real_max <= 1.0:
+            synthetic_df[col] = synthetic_df[col].clip(lower=0.0, upper=1.0)
+            continue
+
+        # ── Rule 3: Age — integer, bounded to real range with small buffer ─────
+        if any(kw in col_lower for kw in age_keywords):
+            synthetic_df[col] = synthetic_df[col].clip(
+                lower=max(1, real_min),
+                upper=min(150, real_max + real_std)
+            )
+            synthetic_df[col] = synthetic_df[col].round().astype(int)
+            continue
+
+        # ── Rule 4: Probability columns — 0 to 1 ─────────────────────────────
+        if any(kw in col_lower for kw in probability_keywords) and real_max <= 1.0:
+            synthetic_df[col] = synthetic_df[col].clip(lower=0.0, upper=1.0)
+            continue
+
+        # ── Rule 5: Always-positive business columns ──────────────────────────
+        if any(kw in col_lower for kw in positive_keywords) and real_min >= 0:
+            synthetic_df[col] = synthetic_df[col].clip(lower=0.0)
+            continue
+
+        # ── Rule 6: Count columns — non-negative integers ─────────────────────
+        if any(kw in col_lower for kw in count_keywords):
+            synthetic_df[col] = synthetic_df[col].clip(lower=0)
+            synthetic_df[col] = synthetic_df[col].round().astype(int)
+            continue
+
+        # ── Rule 7: Universal safety net — generous 3 std buffer ──────────────
+        # Only prevents extreme extrapolation, doesn't fight distributions
+        hard_lower = real_min - (real_std * 3)
+        hard_upper = real_max + (real_std * 3)
+
+        # Never negative if real data was non-negative
+        if real_min >= 0:
+            hard_lower = max(0, hard_lower)
+
+        synthetic_df[col] = synthetic_df[col].clip(lower=hard_lower, upper=hard_upper)
+
+        # ── Rule 8: Integer restoration ───────────────────────────────────────
+        if pd.api.types.is_integer_dtype(real_df[col]):
+            synthetic_df[col] = synthetic_df[col].round().astype(int)
+
+    return synthetic_df
