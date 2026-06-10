@@ -28,7 +28,10 @@ def select_model(profile: DatasetProfile) -> tuple[ModelType, dict]:
     if profile.is_imbalanced:
         epochs = 300 if num_rows < 2000 else 200
         return ModelType.CTGAN, {"epochs": epochs, "conditional": True}
-
+     # Tiny datasets (<50 rows) — use GaussianCopula
+    if num_rows < 50:
+        return ModelType.GAUSSIAN_COPULA, {}
+    
     # Tiny datasets — TVAE handles small data best
     if num_rows < 100:
         return ModelType.TVAE, {}

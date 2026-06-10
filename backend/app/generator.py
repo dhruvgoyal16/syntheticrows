@@ -9,8 +9,7 @@ from sdv.single_table import (
     CTGANSynthesizer,
     TVAESynthesizer,
 )
-from .preprocessor import detect_skewed_columns, log_transform, reverse_log_transform, restore_dtypes, apply_domain_constraints
-
+from .preprocessor import detect_skewed_columns, log_transform, reverse_log_transform, restore_dtypes, apply_domain_constraints, bootstrap_tiny_dataset
 
 def build_synthesizer(model_type: ModelType, metadata: Metadata, kwargs: dict):
     if model_type == ModelType.GAUSSIAN_COPULA:
@@ -74,7 +73,12 @@ def generate(
 
     # Extract conditional flag before passing kwargs to synthesizer
     use_conditional = model_kwargs.pop("conditional", False)
-
+    # For truly tiny datasets — use bootstrapping instead of generative models
+    if len(df) < 50 and not class_ratios:
+        synthetic_df = bootstrap_tiny_dataset(df, num_rows)
+        synthetic_df = restore_dtypes(synthetic_df, df)
+        synthetic_df = apply_domain_constraints(synthetic_df, df)
+        return synthetic_df, "Bootstrap"
     # Detect and apply log transform for skewed columns
     skewed_cols = detect_skewed_columns(df)
     if skewed_cols:
@@ -137,7 +141,7 @@ def generate(
         else:
             # Fallback to normal generation
             synthetic_transformed = synthesizer.sample(num_rows=num_rows)
-            
+
     # Use conditional sampling for imbalanced datasets
     elif use_conditional and profile.target_column:
         synthetic_transformed = get_conditional_samples(

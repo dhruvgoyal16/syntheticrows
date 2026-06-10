@@ -61,9 +61,12 @@ def compute_distributions(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, num
         real_counts, _ = np.histogram(real_vals, bins=bins)
         synth_counts, _ = np.histogram(synth_vals, bins=bins)
 
-        real_pct = (real_counts / len(real_vals) * 100).round(2).tolist()
-        synth_pct = (synth_counts / len(synth_vals) * 100).round(2).tolist()
+        real_pct = [0.0 if np.isnan(v) else round(float(v), 2) for v in (real_counts / len(real_vals) * 100)]
+        synth_pct = [0.0 if np.isnan(v) else round(float(v), 2) for v in (synth_counts / len(synth_vals) * 100)]
         bin_labels = [round(float(b), 2) for b in bins[:-1]]
+
+        def safe_float(v):
+            return 0.0 if (v is None or np.isnan(v)) else round(float(v), 3)
 
         distributions.append({
             "column": col,
@@ -71,10 +74,10 @@ def compute_distributions(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, num
             "bins": bin_labels,
             "real": real_pct,
             "synthetic": synth_pct,
-            "real_mean": round(float(real_vals.mean()), 3),
-            "synth_mean": round(float(synth_vals.mean()), 3),
-            "real_std": round(float(real_vals.std()), 3),
-            "synth_std": round(float(synth_vals.std()), 3),
+            "real_mean": safe_float(real_vals.mean()),
+            "synth_mean": safe_float(synth_vals.mean()),
+            "real_std": safe_float(real_vals.std()),
+            "synth_std": safe_float(synth_vals.std()),
         })
 
     for col in categorical_cols:
@@ -96,7 +99,6 @@ def compute_distributions(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, num
     return distributions
 
 def compute_correlations(real_df: pd.DataFrame, synthetic_df: pd.DataFrame) -> dict:
-    """Compute correlation matrices for real and synthetic data."""
     real_numeric = real_df.select_dtypes(include=[np.number])
     synth_numeric = synthetic_df.select_dtypes(include=[np.number])
 
@@ -108,16 +110,22 @@ def compute_correlations(real_df: pd.DataFrame, synthetic_df: pd.DataFrame) -> d
     real_corr = real_numeric[common_cols].corr().round(3)
     synth_corr = synth_numeric[common_cols].corr().round(3)
 
-    # Compute difference matrix
+    # Replace NaN with 0
+    real_corr = real_corr.fillna(0)
+    synth_corr = synth_corr.fillna(0)
+
     diff_corr = (real_corr - synth_corr).abs().round(3)
-    avg_diff = round(float(diff_corr.values[np.triu_indices_from(diff_corr.values, k=1)].mean()), 3)
+    
+    upper_vals = diff_corr.values[np.triu_indices_from(diff_corr.values, k=1)]
+    upper_vals = upper_vals[~np.isnan(upper_vals)]
+    avg_diff = round(float(upper_vals.mean()), 3) if len(upper_vals) > 0 else 0.0
 
     return {
         "available": True,
         "columns": common_cols,
-        "real": real_corr.values.tolist(),
-        "synthetic": synth_corr.values.tolist(),
-        "diff": diff_corr.values.tolist(),
+        "real": [[0.0 if np.isnan(v) else round(float(v), 3) for v in row] for row in real_corr.values],
+        "synthetic": [[0.0 if np.isnan(v) else round(float(v), 3) for v in row] for row in synth_corr.values],
+        "diff": [[0.0 if np.isnan(v) else round(float(v), 3) for v in row] for row in diff_corr.values],
         "avg_correlation_diff": avg_diff,
         "interpretation": (
             "Excellent — inter-column relationships are very well preserved." if avg_diff < 0.1 else
@@ -294,7 +302,7 @@ async def generate_with_score(
             parsed_ratios = json.loads(class_ratios)
         except Exception:
             parsed_ratios = {}
-            
+
         print("DEBUG class_ratios received:", class_ratios)
         print("DEBUG parsed_ratios:", parsed_ratios)
 

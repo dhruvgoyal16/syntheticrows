@@ -232,3 +232,39 @@ def apply_domain_constraints(synthetic_df: pd.DataFrame, real_df: pd.DataFrame) 
             synthetic_df[col] = synthetic_df[col].round().astype(int)
 
     return synthetic_df
+
+def bootstrap_tiny_dataset(df: pd.DataFrame, num_rows: int, noise_factor: float = 0.05) -> pd.DataFrame:
+    """
+    For tiny datasets (<50 rows), use statistical bootstrapping with small noise
+    instead of generative models. This preserves correlations and distributions
+    much better than neural networks on tiny data.
+    """
+    import random as rnd
+
+    rows = []
+    for _ in range(num_rows):
+        # Sample a random real row
+        base_row = df.sample(n=1, random_state=rnd.randint(0, 10000)).iloc[0].copy()
+
+        for col in df.columns:
+            if pd.api.types.is_numeric_dtype(df[col]):
+                col_std = df[col].std()
+                if col_std > 0:
+                    # Add small Gaussian noise proportional to std
+                    noise = np.random.normal(0, col_std * noise_factor)
+                    base_row[col] = base_row[col] + noise
+
+                    # Keep within real data range
+                    base_row[col] = np.clip(
+                        base_row[col],
+                        df[col].min() - col_std,
+                        df[col].max() + col_std
+                    )
+
+                    # Restore integer if needed
+                    if pd.api.types.is_integer_dtype(df[col]):
+                        base_row[col] = int(round(base_row[col]))
+
+        rows.append(base_row)
+
+    return pd.DataFrame(rows).reset_index(drop=True)
