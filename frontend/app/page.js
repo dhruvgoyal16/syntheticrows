@@ -1,4 +1,5 @@
 "use client"
+import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts"
 import { useState, useRef } from "react"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -89,6 +90,8 @@ export default function Home() {
   const [numRows, setNumRows] = useState(300)
   const [result, setResult] = useState(null)
   const [expandedIssue, setExpandedIssue] = useState(null)
+  const [distributions, setDistributions] = useState(null)      // ← here
+  const [showDistributions, setShowDistributions] = useState(false)  // ← here
   const inputRef = useRef(null)
 
   const handleFile = (selectedFile) => {
@@ -177,6 +180,12 @@ export default function Home() {
       const data = await res.json()
       setResult(data)
       setStep("result")
+
+       // Set distributions from generation response
+      if (data.distributions) {
+        setDistributions(data.distributions)
+      }
+
 
     } catch (err) {
       setError(
@@ -637,7 +646,126 @@ export default function Home() {
                 <p className="text-gray-600 text-xs">{result.tstr.reason}</p>
               </div>
             )}
-            
+{/* Distribution Plots */}
+            {distributions && distributions.length > 0 && (
+              <div className="bg-gray-800 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-gray-400 text-xs font-semibold uppercase tracking-wide">
+                    Distribution Comparison
+                  </p>
+                  <button
+                    onClick={() => setShowDistributions(!showDistributions)}
+                    className="text-violet-400 text-xs hover:text-violet-300 transition-colors"
+                  >
+                    {showDistributions ? "▼ Hide charts" : "▶ Show charts"}
+                  </button>
+                </div>
+
+                {showDistributions && (
+                  <div className="space-y-6">
+                    {distributions.map((dist) => {
+                      if (dist.type === "numerical") {
+                        const chartData = dist.bins.map((bin, i) => ({
+                          bin: bin,
+                          Real: dist.real[i],
+                          Synthetic: dist.synthetic[i],
+                        }))
+
+                        return (
+                          <div key={dist.column}>
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="text-white text-xs font-semibold">{dist.column}</p>
+                              <div className="flex gap-3 text-xs">
+                                <span className="text-gray-400">
+                                  Real μ={dist.real_mean} σ={dist.real_std}
+                                </span>
+                                <span className="text-violet-400">
+                                  Synth μ={dist.synth_mean} σ={dist.synth_std}
+                                </span>
+                              </div>
+                            </div>
+                            <ResponsiveContainer width="100%" height={120}>
+                              <BarChart data={chartData} barGap={0} barCategoryGap="10%">
+                                <XAxis
+                                  dataKey="bin"
+                                  tick={{ fontSize: 8, fill: "#6b7280" }}
+                                  tickFormatter={(v) => v.toFixed(1)}
+                                />
+                                <YAxis
+                                  tick={{ fontSize: 8, fill: "#6b7280" }}
+                                  tickFormatter={(v) => `${v}%`}
+                                />
+                                <Tooltip
+                                  formatter={(val) => `${val}%`}
+                                  contentStyle={{
+                                    backgroundColor: "#1f2937",
+                                    border: "1px solid #374151",
+                                    borderRadius: "8px",
+                                    fontSize: "11px"
+                                  }}
+                                />
+                                <Bar dataKey="Real" fill="#6366f1" opacity={0.8} />
+                                <Bar dataKey="Synthetic" fill="#f59e0b" opacity={0.8} />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        )
+                      }
+
+                      if (dist.type === "categorical") {
+                        const chartData = dist.categories.map((cat, i) => ({
+                          category: cat,
+                          Real: dist.real[i],
+                          Synthetic: dist.synthetic[i],
+                        }))
+
+                        return (
+                          <div key={dist.column}>
+                            <p className="text-white text-xs font-semibold mb-2">{dist.column}</p>
+                            <ResponsiveContainer width="100%" height={120}>
+                              <BarChart data={chartData} barGap={0} barCategoryGap="20%">
+                                <XAxis
+                                  dataKey="category"
+                                  tick={{ fontSize: 8, fill: "#6b7280" }}
+                                />
+                                <YAxis
+                                  tick={{ fontSize: 8, fill: "#6b7280" }}
+                                  tickFormatter={(v) => `${v}%`}
+                                />
+                                <Tooltip
+                                  formatter={(val) => `${val}%`}
+                                  contentStyle={{
+                                    backgroundColor: "#1f2937",
+                                    border: "1px solid #374151",
+                                    borderRadius: "8px",
+                                    fontSize: "11px"
+                                  }}
+                                />
+                                <Bar dataKey="Real" fill="#6366f1" opacity={0.8} />
+                                <Bar dataKey="Synthetic" fill="#f59e0b" opacity={0.8} />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        )
+                      }
+
+                      return null
+                    })}
+
+                    <div className="flex gap-4 pt-2 border-t border-gray-700">
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-sm bg-indigo-500 opacity-80" />
+                        <span className="text-gray-400 text-xs">Real data</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-sm bg-yellow-500 opacity-80" />
+                        <span className="text-gray-400 text-xs">Synthetic data</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {/* Column Quality Report */}
             {result.column_quality && result.column_quality.length > 0 && (
               <div className="bg-gray-800 rounded-xl p-4">

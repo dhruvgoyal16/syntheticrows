@@ -4,7 +4,7 @@ from typing import List
 import pandas as pd
 import io
 import json
-
+import numpy as np
 from .models import Fix
 from .profiler import profile_dataset
 from .preprocessor import apply_fixes, auto_preprocess
@@ -25,6 +25,75 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def compute_distributions(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, num_bins: int = 20) -> list:
+    distributions = []
+
+    numeric_cols = real_df.select_dtypes(include=[np.number]).columns
+    categorical_cols = real_df.select_dtypes(include=["object", "category"]).columns
+
+    for col in numeric_cols:
+        if col not in synthetic_df.columns:
+            continue
+
+        real_vals = real_df[col].dropna()
+        synth_vals = synthetic_df[col].dropna()
+         # Treat binary columns as categorical
+        if real_vals.nunique() == 2:
+            categories = sorted(real_vals.unique().tolist())
+            real_counts = real_vals.value_counts(normalize=True) * 100
+            synth_counts = synth_vals.value_counts(normalize=True) * 100
+            distributions.append({
+                "column": col,
+                "type": "categorical",
+                "categories": [str(c) for c in categories],
+                "real": [round(float(real_counts.get(c, 0)), 2) for c in categories],
+                "synthetic": [round(float(synth_counts.get(c, 0)), 2) for c in categories],
+            })
+            continue
+
+        combined_min = min(real_vals.min(), synth_vals.min())
+        combined_max = max(real_vals.max(), synth_vals.max())
+
+        if combined_min == combined_max:
+            continue
+
+        bins = np.linspace(combined_min, combined_max, num_bins + 1)
+        real_counts, _ = np.histogram(real_vals, bins=bins)
+        synth_counts, _ = np.histogram(synth_vals, bins=bins)
+
+        real_pct = (real_counts / len(real_vals) * 100).round(2).tolist()
+        synth_pct = (synth_counts / len(synth_vals) * 100).round(2).tolist()
+        bin_labels = [round(float(b), 2) for b in bins[:-1]]
+
+        distributions.append({
+            "column": col,
+            "type": "numerical",
+            "bins": bin_labels,
+            "real": real_pct,
+            "synthetic": synth_pct,
+            "real_mean": round(float(real_vals.mean()), 3),
+            "synth_mean": round(float(synth_vals.mean()), 3),
+            "real_std": round(float(real_vals.std()), 3),
+            "synth_std": round(float(synth_vals.std()), 3),
+        })
+
+    for col in categorical_cols:
+        if col not in synthetic_df.columns:
+            continue
+
+        real_counts = real_df[col].value_counts(normalize=True) * 100
+        synth_counts = synthetic_df[col].value_counts(normalize=True) * 100
+        categories = real_counts.index.tolist()
+
+        distributions.append({
+            "column": col,
+            "type": "categorical",
+            "categories": categories,
+            "real": [round(float(real_counts.get(c, 0)), 2) for c in categories],
+            "synthetic": [round(float(synth_counts.get(c, 0)), 2) for c in categories],
+        })
+
+    return distributions
 
 @app.get("/")
 def root():
@@ -73,6 +142,83 @@ async def analyse_csv(file: UploadFile = File(...)):
         "issues_found": len(all_issues)
     }
 
+@app.post("/distributions")
+async def get_distributions(
+    file: UploadFile = File(...),
+    synthetic_csv: str = "",
+    num_bins: int = 20
+):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are allowed")
+
+    contents = await file.read()
+    real_df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
+
+    if not synthetic_csv:
+        raise HTTPException(status_code=400, detail="Synthetic CSV data is required")
+
+    synthetic_df = pd.read_csv(io.StringIO(synthetic_csv))
+
+    distributions = []
+
+    numeric_cols = real_df.select_dtypes(include=[np.number]).columns
+    categorical_cols = real_df.select_dtypes(include=["object", "category"]).columns
+
+    for col in numeric_cols:
+        if col not in synthetic_df.columns:
+            continue
+
+        real_vals = real_df[col].dropna()
+        synth_vals = synthetic_df[col].dropna()
+
+        # Compute shared bin edges
+        combined_min = min(real_vals.min(), synth_vals.min())
+        combined_max = max(real_vals.max(), synth_vals.max())
+
+        if combined_min == combined_max:
+            continue
+
+        bins = np.linspace(combined_min, combined_max, num_bins + 1)
+
+        real_counts, _ = np.histogram(real_vals, bins=bins)
+        synth_counts, _ = np.histogram(synth_vals, bins=bins)
+
+        # Normalize to percentages
+        real_pct = (real_counts / len(real_vals) * 100).round(2).tolist()
+        synth_pct = (synth_counts / len(synth_vals) * 100).round(2).tolist()
+
+        bin_labels = [round(float(b), 2) for b in bins[:-1]]
+
+        distributions.append({
+            "column": col,
+            "type": "numerical",
+            "bins": bin_labels,
+            "real": real_pct,
+            "synthetic": synth_pct,
+            "real_mean": round(float(real_vals.mean()), 3),
+            "synth_mean": round(float(synth_vals.mean()), 3),
+            "real_std": round(float(real_vals.std()), 3),
+            "synth_std": round(float(synth_vals.std()), 3),
+        })
+
+    for col in categorical_cols:
+        if col not in synthetic_df.columns:
+            continue
+
+        real_counts = real_df[col].value_counts(normalize=True) * 100
+        synth_counts = synthetic_df[col].value_counts(normalize=True) * 100
+
+        categories = real_counts.index.tolist()
+
+        distributions.append({
+            "column": col,
+            "type": "categorical",
+            "categories": categories,
+            "real": [round(float(real_counts.get(c, 0)), 2) for c in categories],
+            "synthetic": [round(float(synth_counts.get(c, 0)), 2) for c in categories],
+        })
+
+    return {"distributions": distributions}
 
 @app.post("/generate-with-score")
 async def generate_with_score(
@@ -129,6 +275,7 @@ async def generate_with_score(
             "max_recommended": max_recommended,
             "column_quality": [cq.dict() for cq in result.column_quality],
             "tstr": result.tstr,
+            "distributions": compute_distributions(cleaned_df, synthetic_df),
             "csv_data": output.getvalue()
         }
 

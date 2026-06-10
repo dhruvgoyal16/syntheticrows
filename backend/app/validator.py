@@ -203,11 +203,16 @@ def tstr_validation(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, target_co
 
         # Calculate performance gap
         gap = round(real_real_acc - synth_real_acc, 1)
-        gap_pct = round((gap / real_real_acc) * 100, 1) if real_real_acc > 0 else 0
+        gap_pct = round((abs(gap) / real_real_acc) * 100, 1) if real_real_acc > 0 else 0
+        synthetic_better = synth_real_acc > real_real_acc
 
         # Grade the gap
         # Grade the gap
-        if gap_pct <= 5:
+        if synthetic_better:
+            tstr_grade = "Excellent"
+            tstr_color = "green"
+            interpretation = f"Exceptional result. A model trained on your synthetic data actually outperforms one trained on real data ({synth_real_acc}% vs {real_real_acc}%). Your synthetic data has effectively smoothed out noise in the original dataset, making it even more useful for ML training."
+        elif gap_pct <= 5:
             tstr_grade = "Excellent"
             tstr_color = "green"
             interpretation = f"Outstanding result. A model trained on your synthetic data performs nearly identically to one trained on real data — only a {gap}% accuracy gap. Your synthetic data is production-ready and can fully replace real data for ML training."
