@@ -95,6 +95,38 @@ def compute_distributions(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, num
 
     return distributions
 
+def compute_correlations(real_df: pd.DataFrame, synthetic_df: pd.DataFrame) -> dict:
+    """Compute correlation matrices for real and synthetic data."""
+    real_numeric = real_df.select_dtypes(include=[np.number])
+    synth_numeric = synthetic_df.select_dtypes(include=[np.number])
+
+    common_cols = [c for c in real_numeric.columns if c in synth_numeric.columns]
+
+    if len(common_cols) < 2:
+        return {"available": False}
+
+    real_corr = real_numeric[common_cols].corr().round(3)
+    synth_corr = synth_numeric[common_cols].corr().round(3)
+
+    # Compute difference matrix
+    diff_corr = (real_corr - synth_corr).abs().round(3)
+    avg_diff = round(float(diff_corr.values[np.triu_indices_from(diff_corr.values, k=1)].mean()), 3)
+
+    return {
+        "available": True,
+        "columns": common_cols,
+        "real": real_corr.values.tolist(),
+        "synthetic": synth_corr.values.tolist(),
+        "diff": diff_corr.values.tolist(),
+        "avg_correlation_diff": avg_diff,
+        "interpretation": (
+            "Excellent — inter-column relationships are very well preserved." if avg_diff < 0.1 else
+            "Good — most inter-column relationships are preserved." if avg_diff < 0.2 else
+            "Fair — some inter-column relationships differ from real data." if avg_diff < 0.3 else
+            "Poor — significant correlation differences detected. Consider approving more fixes."
+        )
+    }
+
 @app.get("/")
 def root():
     return {"message": "SynthIQ backend is running", "version": "2.0.0"}
@@ -276,6 +308,7 @@ async def generate_with_score(
             "column_quality": [cq.dict() for cq in result.column_quality],
             "tstr": result.tstr,
             "distributions": compute_distributions(cleaned_df, synthetic_df),
+            "correlations": compute_correlations(cleaned_df, synthetic_df),
             "csv_data": output.getvalue()
         }
 

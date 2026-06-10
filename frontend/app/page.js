@@ -76,6 +76,98 @@ const GENERATION_STAGES = [
 ]
 
 // ─── Component ────────────────────────────────────────────────────────────────
+function CorrelationHeatmap({ title, columns, matrix, colorScale }) {
+  const size = Math.min(320, columns.length * 48)
+  const cellSize = size / columns.length
+
+  const getColor = (val) => {
+    if (val === null || val === undefined || isNaN(val)) return "#374151"
+    const v = Math.max(-1, Math.min(1, val))
+    if (v > 0) {
+      const intensity = Math.round(v * 255)
+      return `rgb(${255 - intensity}, ${255 - Math.round(intensity * 0.4)}, ${255 - intensity})`
+    } else {
+      const intensity = Math.round(-v * 255)
+      return `rgb(${255 - Math.round(intensity * 0.4)}, ${255 - intensity}, ${255 - intensity})`
+    }
+  }
+
+  const getTextColor = (val) => {
+    if (Math.abs(val) > 0.6) return "white"
+    return "#9ca3af"
+  }
+
+  return (
+    <div>
+      <p className="text-gray-400 text-xs font-semibold mb-2">{title}</p>
+      <div className="overflow-x-auto">
+        <svg width={size + cellSize} height={size + cellSize}>
+          {/* Column labels */}
+          {columns.map((col, i) => (
+            <text
+              key={`col-${i}`}
+              x={cellSize + i * cellSize + cellSize / 2}
+              y={cellSize - 4}
+              textAnchor="end"
+              fontSize="8"
+              fill="#6b7280"
+              transform={`rotate(-45, ${cellSize + i * cellSize + cellSize / 2}, ${cellSize - 4})`}
+            >
+              {col.length > 8 ? col.slice(0, 8) + "…" : col}
+            </text>
+          ))}
+          {/* Row labels */}
+          {columns.map((col, i) => (
+            <text
+              key={`row-${i}`}
+              x={cellSize - 4}
+              y={cellSize + i * cellSize + cellSize / 2 + 3}
+              textAnchor="end"
+              fontSize="8"
+              fill="#6b7280"
+            >
+              {col.length > 8 ? col.slice(0, 8) + "…" : col}
+            </text>
+          ))}
+          {/* Cells */}
+          {matrix.map((row, i) =>
+            row.map((val, j) => (
+              <g key={`${i}-${j}`}>
+                <rect
+                  x={cellSize + j * cellSize}
+                  y={cellSize + i * cellSize}
+                  width={cellSize - 1}
+                  height={cellSize - 1}
+                  fill={getColor(val)}
+                  rx={2}
+                />
+                {cellSize >= 32 && (
+                  <text
+                    x={cellSize + j * cellSize + cellSize / 2}
+                    y={cellSize + i * cellSize + cellSize / 2 + 3}
+                    textAnchor="middle"
+                    fontSize="7"
+                    fill={getTextColor(val)}
+                  >
+                    {val?.toFixed(2)}
+                  </text>
+                )}
+              </g>
+            ))
+          )}
+        </svg>
+      </div>
+      {/* Color scale legend */}
+      <div className="flex items-center gap-2 mt-1">
+        <span className="text-gray-600 text-xs">-1</span>
+        <div className="flex-1 h-2 rounded" style={{
+          background: "linear-gradient(to right, rgb(100,255,100), white, rgb(255,100,100))"
+        }} />
+        <span className="text-gray-600 text-xs">+1</span>
+      </div>
+    </div>
+  )
+}
 
 export default function Home() {
   const [file, setFile] = useState(null)
@@ -646,6 +738,47 @@ export default function Home() {
                 <p className="text-gray-600 text-xs">{result.tstr.reason}</p>
               </div>
             )}
+            {/* Correlation Heatmap */}
+            {result.correlations?.available && (
+              <div className="bg-gray-800 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-gray-400 text-xs font-semibold uppercase tracking-wide">
+                    Correlation Preservation
+                  </p>
+                  <span className={`text-xs px-2 py-1 rounded-full ${
+                    result.correlations.avg_correlation_diff < 0.1 ? "bg-green-500/20 text-green-400" :
+                    result.correlations.avg_correlation_diff < 0.2 ? "bg-yellow-500/20 text-yellow-400" :
+                    "bg-red-500/20 text-red-400"
+                  }`}>
+                    avg diff: {result.correlations.avg_correlation_diff}
+                  </span>
+                </div>
+
+                <p className="text-gray-500 text-xs mb-4">{result.correlations.interpretation}</p>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <CorrelationHeatmap
+                    title="Real Data"
+                    columns={result.correlations.columns}
+                    matrix={result.correlations.real}
+                  />
+                  <CorrelationHeatmap
+                    title="Synthetic Data"
+                    columns={result.correlations.columns}
+                    matrix={result.correlations.synthetic}
+                  />
+                </div>
+
+                <div className="mt-4 bg-gray-700 rounded-xl p-3">
+                  <p className="text-gray-400 text-xs font-semibold mb-1">How to read this</p>
+                  <p className="text-gray-500 text-xs">
+                    Green = positive correlation, Red = negative correlation, White = no correlation.
+                    The closer the two heatmaps look, the better your synthetic data preserves real-world relationships between columns.
+                  </p>
+                </div>
+              </div>
+            )}
+            
 {/* Distribution Plots */}
             {distributions && distributions.length > 0 && (
               <div className="bg-gray-800 rounded-xl p-4">
