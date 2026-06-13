@@ -10,6 +10,7 @@ from .profiler import profile_dataset
 from .preprocessor import apply_fixes, auto_preprocess
 from .generator import generate
 from .validator import validate
+from .text_augmentor import detect_text_columns, augment_dataset, score_text_augmentation
 
 app = FastAPI(
     title="SynthIQ API",
@@ -340,6 +341,95 @@ async def generate_with_score(
             "tstr": result.tstr,
             "distributions": compute_distributions(cleaned_df, synthetic_df),
             "correlations": compute_correlations(cleaned_df, synthetic_df),
+            "csv_data": output.getvalue()
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/analyse-text")
+async def analyse_text(file: UploadFile = File(...)):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are allowed")
+
+    contents = await file.read()
+    df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
+
+    text_cols = detect_text_columns(df)
+    non_text_cols = [c for c in df.columns if c not in text_cols]
+
+    # Sample texts for preview
+    previews = {}
+    for col in text_cols:
+        sample = df[col].dropna().head(3).tolist()
+        previews[col] = sample
+
+    return {
+        "filename": file.filename,
+        "rows": len(df),
+        "columns": len(df.columns),
+        "column_names": df.columns.tolist(),
+        "text_columns": text_cols,
+        "non_text_columns": non_text_cols,
+        "text_column_count": len(text_cols),
+        "previews": previews,
+        "is_text_dataset": len(text_cols) > 0
+    }
+
+
+@app.post("/augment-text")
+async def augment_text_endpoint(
+    file: UploadFile = File(...),
+    num_rows: int = 500,
+    augmentation_strength: str = "medium"
+):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are allowed")
+
+    contents = await file.read()
+    df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
+
+    if num_rows > 1000:
+        num_rows = 1000
+
+    max_recommended = len(df) * 3
+    capped = False
+    if num_rows > max_recommended:
+        num_rows = max_recommended
+        capped = True
+
+    text_cols = detect_text_columns(df)
+
+    if not text_cols:
+        raise HTTPException(
+            status_code=400,
+            detail="No text columns detected in this dataset. Use the tabular generation endpoint instead."
+        )
+
+    try:
+        augmented_df = augment_dataset(
+            df,
+            text_cols,
+            num_rows,
+            augmentation_strength
+        )
+
+        quality = score_text_augmentation(df, augmented_df, text_cols)
+
+        output = io.StringIO()
+        augmented_df.to_csv(output, index=False)
+
+        return {
+            "original_rows": len(df),
+            "augmented_rows": len(augmented_df),
+            "rows_generated": len(augmented_df) - len(df),
+            "text_columns": text_cols,
+            "augmentation_strength": augmentation_strength,
+            "capped": capped,
+            "max_recommended": max_recommended,
+            "quality": quality,
             "csv_data": output.getvalue()
         }
 
