@@ -186,6 +186,8 @@ export default function Home() {
   const [showDistributions, setShowDistributions] = useState(false)  // ← here
   const [classRatios, setClassRatios] = useState({})
   const [history, setHistory] = useState([])
+  const [targetColumn, setTargetColumn] = useState("")
+  const [targetConfirmed, setTargetConfirmed] = useState(false)
   const inputRef = useRef(null)
 
   const handleFile = (selectedFile) => {
@@ -226,6 +228,8 @@ export default function Home() {
       }))
       setIssues(data.issues)
       setFixes(defaultFixes)
+      setTargetColumn(data.suggested_target || "")
+      setTargetConfirmed(false)
       setStep(data.issues.length > 0 ? "quality" : "generate")
     } catch (err) {
       setError("Could not connect to backend. Make sure the backend server is running.")
@@ -267,11 +271,15 @@ export default function Home() {
     )
     console.log("activeRatios:", activeRatios)
     const ratiosParam = Object.keys(activeRatios).length > 0
-    ? `&class_ratios=${encodeURIComponent(JSON.stringify(activeRatios))}`
-    : ""
+      ? `&class_ratios=${encodeURIComponent(JSON.stringify(activeRatios))}`
+      : ""
+
+    const targetParam = targetColumn
+      ? `&target_column=${encodeURIComponent(targetColumn)}`
+      : ""
 
     try {
-      const res = await fetch(`http://localhost:8000/generate-with-score?num_rows=${numRows}${ratiosParam}`, {
+      const res = await fetch(`http://localhost:8000/generate-with-score?num_rows=${numRows}${ratiosParam}${targetParam}`, {
         method: "POST",
         body: formData,
       })
@@ -555,6 +563,37 @@ export default function Home() {
                 </p>
               </div>
             )}
+            {/* Target Column Selector */}
+            <div className="bg-gray-800/50 rounded-xl p-4 mb-4">
+              <p className="text-white text-sm font-semibold mb-1">Target Column</p>
+              <p className="text-gray-500 text-xs mb-3">
+                The column your ML model will predict. Used for TSTR validation and class balancing.
+                Leave as "None" for unsupervised datasets.
+              </p>
+              <select
+                value={targetColumn || ""}
+                onChange={(e) => setTargetColumn(e.target.value)}
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-violet-500"
+              >
+                <option value="">None (unsupervised dataset)</option>
+                {summary?.column_names?.map((col) => (
+                  <option key={col} value={col}>
+                    {col}
+                    {col === summary?.suggested_target ? " ✦ suggested" : ""}
+                  </option>
+                ))}
+              </select>
+              {targetColumn && (
+                <p className="text-violet-400 text-xs mt-2">
+                  ✓ Using <span className="font-semibold">{targetColumn}</span> as target column
+                </p>
+              )}
+              {!targetColumn && (
+                <p className="text-gray-600 text-xs mt-2">
+                  No target — TSTR validation will be skipped
+                </p>
+              )}
+            </div>
 {/* Conditional Generation */}
             {summary?.target_column && (
               <div className="bg-gray-800/50 rounded-xl p-4 mb-4">
@@ -1077,6 +1116,8 @@ export default function Home() {
                 setResult(null)
                 setDistributions(null)
                 setClassRatios({})
+                setTargetColumn("")
+                setTargetConfirmed(false)
                 setStep("upload")
               }}
               className="w-full bg-gray-800 hover:bg-gray-700 text-gray-400 font-semibold px-8 py-3 rounded-xl transition-all"

@@ -177,6 +177,7 @@ async def analyse_csv(file: UploadFile = File(...)):
         "imbalance_ratio": profile.imbalance_ratio,
         "has_datetime": profile.has_datetime,
         "target_column": profile.target_column,
+        "suggested_target": profile.target_column,  # suggestion only
         "columns_to_drop": profile.columns_to_drop,
         "issues": all_issues,
         "issues_found": len(all_issues)
@@ -265,7 +266,8 @@ async def generate_with_score(
     file: UploadFile = File(...),
     num_rows: int = 500,
     fixes: str = "[]",
-    class_ratios: str = "{}"
+    class_ratios: str = "{}",
+    target_column: str = ""
 ):
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are allowed")
@@ -306,8 +308,19 @@ async def generate_with_score(
         print("DEBUG class_ratios received:", class_ratios)
         print("DEBUG parsed_ratios:", parsed_ratios)
 
+        # Override profile target with user confirmed target
+        if target_column.strip():
+            profile.target_column = target_column.strip()
+            # Re-detect imbalance with confirmed target
+            from .profiler import detect_imbalance
+            is_imb, imb_ratio = detect_imbalance(cleaned_df, target_column.strip())
+            profile.is_imbalanced = is_imb
+            profile.imbalance_ratio = imb_ratio
+
         synthetic_df, model_used = generate(cleaned_df, profile, num_rows, parsed_ratios)
-        result = validate(cleaned_df, synthetic_df, profile.target_column)
+        # Use user-confirmed target if provided, else fall back to detected
+        confirmed_target = target_column.strip() if target_column.strip() else profile.target_column
+        result = validate(cleaned_df, synthetic_df, confirmed_target)
 
         output = io.StringIO()
         synthetic_df.to_csv(output, index=False)

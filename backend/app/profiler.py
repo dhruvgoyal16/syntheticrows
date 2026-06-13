@@ -19,8 +19,9 @@ def detect_column_type(col: pd.Series, col_name: str) -> ColumnType:
         except Exception:
             pass
 
-    # Try to parse as datetime by name
-    if any(kw in col_name.lower() for kw in ["date", "time", "timestamp", "year", "month", "day"]):
+    # Try to parse as datetime by name — only if values look like actual dates
+    # (not just columns that happen to contain the word "year" or "day")
+    if any(kw in col_name.lower() for kw in ["date", "time", "timestamp"]):
         try:
             pd.to_datetime(col)
             return ColumnType.DATETIME
@@ -157,17 +158,48 @@ def detect_dataset_type(df: pd.DataFrame, col_types: dict) -> DatasetType:
 
 
 def detect_target_column(df: pd.DataFrame) -> Tuple[bool, str]:
-    target_keywords = ["target", "label", "class", "outcome", "y", "output", "result"]
-    for col in df.columns:
-        if col.lower() in target_keywords:
+    """
+    Suggest a likely target column using data characteristics.
+    This is a suggestion only — user should confirm.
+    Priority:
+    1. Binary integer/numeric columns at the end of the dataframe
+    2. Binary columns with names suggesting outcomes
+    3. First binary column found
+    """
+    # Common target-like name patterns (broad but not exhaustive)
+    target_hints = [
+        "default", "churn", "fraud", "survived", "outcome", "target",
+        "label", "class", "result", "approved", "converted", "clicked",
+        "purchased", "cancelled", "failed", "success", "win", "loss",
+        "y", "output", "response", "event", "flag", "status", "disease",
+        "died", "dead", "active", "inactive", "valid", "invalid"
+    ]
+
+    binary_cols = [col for col in df.columns if df[col].nunique() == 2]
+
+    if not binary_cols:
+        return False, None
+
+    # Priority 1 — binary column whose name contains a target hint
+    for col in reversed(binary_cols):  # reversed = prefer last
+        col_lower = col.lower()
+        if any(hint in col_lower for hint in target_hints):
             return True, col
-    return False, None
+
+    # Priority 2 — binary integer column (0/1) at the end
+    for col in reversed(binary_cols):
+        if pd.api.types.is_numeric_dtype(df[col]):
+            vals = set(df[col].dropna().unique())
+            if vals.issubset({0, 1, 0.0, 1.0}):
+                return True, col
+
+    # Priority 3 — last binary column as fallback
+    return True, binary_cols[-1]
 
 
 def detect_imbalance(df: pd.DataFrame, target_col: str = None) -> Tuple[bool, float]:
     check_col = target_col
     if check_col is None:
-        # Find most likely target column
         for col in df.columns:
             if df[col].nunique() == 2:
                 check_col = col
@@ -177,7 +209,18 @@ def detect_imbalance(df: pd.DataFrame, target_col: str = None) -> Tuple[bool, fl
 
     counts = df[check_col].value_counts(normalize=True)
     ratio = round(float(counts.iloc[0]), 3)
-    # 60/40 split or worse is considered imbalanced for ML purposes
+
+    # Also check string binary columns like "0"/"1" or "yes"/"no"
+    if ratio <= 0.60 and check_col is None:
+        for col in df.columns:
+            col_vals = df[col].astype(str).str.lower().unique()
+            if set(col_vals).issubset({"0", "1", "yes", "no", "true", "false"}):
+                counts = df[col].value_counts(normalize=True)
+                ratio = round(float(counts.iloc[0]), 3)
+                if ratio > 0.60:
+                    check_col = col
+                    break
+
     return ratio > 0.60, ratio
 
 # ─── Size Category ─────────────────────────────────────────────────────────────
