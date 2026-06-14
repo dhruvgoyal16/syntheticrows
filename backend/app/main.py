@@ -437,3 +437,66 @@ async def augment_text_endpoint(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/generate-text-hybrid")
+async def generate_text_hybrid(
+    file: UploadFile = File(...),
+    num_rows: int = 500,
+    augmentation_strength: str = "medium",
+    label_column: str = ""
+):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are allowed")
+
+    contents = await file.read()
+    df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
+
+    if num_rows > 1000:
+        num_rows = 1000
+
+    text_cols = detect_text_columns(df)
+
+    if not text_cols:
+        raise HTTPException(
+            status_code=400,
+            detail="No text columns detected. Use the tabular generation endpoint instead."
+        )
+
+    profile = profile_dataset(df, file.filename)
+
+    # Determine label column — user-provided or detected
+    confirmed_label = label_column.strip() if label_column.strip() else profile.target_column
+
+    try:
+        from .text_augmentor import hybrid_generate
+
+        result_df, model_used = hybrid_generate(
+            df,
+            text_cols,
+            num_rows,
+            profile,
+            augmentation_strength,
+            confirmed_label
+        )
+
+        quality = score_text_augmentation(df, result_df, text_cols)
+
+        output = io.StringIO()
+        result_df.to_csv(output, index=False)
+
+        return {
+            "original_rows": len(df),
+            "generated_rows": len(result_df),
+            "text_columns": text_cols,
+            "tabular_columns": [c for c in df.columns if c not in text_cols],
+            "label_column": confirmed_label,
+            "model_used": model_used,
+            "augmentation_strength": augmentation_strength,
+            "quality": quality,
+            "csv_data": output.getvalue()
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
