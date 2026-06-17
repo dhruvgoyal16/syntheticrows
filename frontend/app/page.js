@@ -61,7 +61,7 @@ const GENERATION_STAGES = [
   { id: 5, label: "Scoring quality" },
 ]
 
-
+// ─── SWAP THIS with your real donation link (Razorpay page / UPI link / etc.) ───
 const DONATE_URL = "https://razorpay.me/@dhruvgoyal"
 
 const FOOTER_QUIPS = [
@@ -653,12 +653,26 @@ export default function Home() {
 
             {result.tstr?.available && (
               <div className="sq-card pad-lg">
-                <div className="sq-eyebrow" style={{ marginBottom: 15 }}>ML readiness — train on synthetic, test on real</div>
-                <div className="sq-tstr">
-                  <div className="sq-tstr-box"><div className="k">Real → Real</div><div className="v">{result.tstr.real_real_accuracy}%</div></div>
-                  <div className="sq-tstr-box"><div className="k">Synthetic → Real</div><div className="v" style={{ color: sColor(tstrScore(result.tstr.color)) }}>{result.tstr.synth_real_accuracy}%</div></div>
-                  <div className="sq-tstr-box flag" style={{ background: sWash(tstrScore(result.tstr.color)) }}><div className="k">Accuracy gap</div><div className="v" style={{ color: sColor(tstrScore(result.tstr.color)) }}>{result.tstr.performance_gap}%</div><div className="g" style={{ color: sColor(tstrScore(result.tstr.color)) }}>{result.tstr.grade}</div></div>
-                </div>
+                <div className="sq-eyebrow" style={{ marginBottom: 10 }}>ML readiness — train on synthetic, test on real</div>
+                <details className="sq-tstr-explain">
+                  <summary>What is this, and how do I read it?</summary>
+                  <div className="body">
+                    <p>This is the real test of whether your synthetic data is good enough to <b>train a machine-learning model</b>. We train two models to predict your target column ({targetColumn || "the selected column"}): one on your <b>real</b> data, one on your <b>synthetic</b> data. Then we test <b>both on real data they've never seen</b>.</p>
+                    <p><b>Real → Real</b> is the benchmark: how well a model does when trained on real data. <b>Synthetic → Real</b> is the one that matters: how well a model trained on your synthetic data performs on real data. The <b>accuracy gap</b> between them tells the story — a small gap means your synthetic data is nearly as useful as the real thing for training models.</p>
+                  </div>
+                </details>
+                {(() => {
+                  const isNeutral = result.tstr.color === "neutral"
+                  const tColor = isNeutral ? "var(--muted)" : sColor(tstrScore(result.tstr.color))
+                  const tWash = isNeutral ? "#f1f1ee" : sWash(tstrScore(result.tstr.color))
+                  return (
+                    <div className="sq-tstr">
+                      <div className="sq-tstr-box"><div className="k">Real → Real</div><div className="v">{result.tstr.real_real_accuracy}%</div></div>
+                      <div className="sq-tstr-box"><div className="k">Synthetic → Real</div><div className="v" style={{ color: tColor }}>{result.tstr.synth_real_accuracy}%</div></div>
+                      <div className="sq-tstr-box flag" style={{ background: tWash }}><div className="k">Accuracy gap</div><div className="v" style={{ color: tColor }}>{result.tstr.performance_gap}%</div><div className="g" style={{ color: tColor }}>{result.tstr.grade}</div></div>
+                    </div>
+                  )
+                })()}
                 <p className="sq-intro">{result.tstr.interpretation}</p>
                 {result.tstr.synth_real_accuracy <= 30 && (
                   <div className="sq-tstr-note">

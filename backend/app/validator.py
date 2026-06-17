@@ -232,7 +232,7 @@ def tstr_validation(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, target_co
         majority_class_rate = round(
             float(pd.Series(y_real_test).value_counts(normalize=True).iloc[0]) * 100, 1
         )
-        baseline_is_weak = real_real_acc <= max(majority_class_rate + 5, 60)
+        baseline_is_weak = real_real_acc <= majority_class_rate + 2
 
         if baseline_is_weak:
             return {
@@ -243,14 +243,16 @@ def tstr_validation(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, target_co
                 "performance_gap": gap,
                 "performance_gap_pct": gap_pct,
                 "grade": "Inconclusive",
-                "color": "yellow",
+                "color": "neutral",
                 "interpretation": (
-                    f"This comparison isn't very meaningful for this dataset. Even a model trained on "
-                    f"real data only reaches {real_real_acc}% accuracy — about what you'd get by always "
-                    f"guessing the most common class ({majority_class_rate}%). That usually means the "
-                    f"target is hard to predict from these columns, or the classes are heavily imbalanced. "
-                    f"Read the synthetic-vs-real numbers ({synth_real_acc}% vs {real_real_acc}%) with "
-                    f"caution rather than as proof the synthetic data is good or bad."
+                    f"This result is inconclusive — and that's informational, not a problem with your data. "
+                    f"Even a model trained on real data only reaches {real_real_acc}%, which is about what "
+                    f"you'd get by always guessing the most common class ({majority_class_rate}%). So neither "
+                    f"model really had to learn — which means even a small accuracy gap here ({gap}%) doesn't "
+                    f"tell us much, because both models are mostly guessing the majority class. This usually "
+                    f"happens when the target is heavily imbalanced or hard to predict from the other columns. "
+                    f"To get a meaningful ML-readiness read, try a more balanced target or one more related to "
+                    f"your features."
                 ),
             }
 

@@ -403,3 +403,13 @@ input[type=range]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 
 .sq-balance-btn:hover:not(:disabled) { background: var(--yellow); }
 .sq-balance-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .sq-class-count { font-weight: 400; color: var(--faint); font-size: 11px; }
+
+/* ── TSTR explainer (collapsible) ── */
+.sq-tstr-explain { margin-bottom: 16px; }
+.sq-tstr-explain summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--yellow-deep); list-style: none; display: inline-flex; align-items: center; gap: 6px; user-select: none; }
+.sq-tstr-explain summary::before { content: "▶"; font-size: 9px; transition: transform 0.15s; }
+.sq-tstr-explain[open] summary::before { transform: rotate(90deg); }
+.sq-tstr-explain summary::-webkit-details-marker { display: none; }
+.sq-tstr-explain .body { margin-top: 10px; padding: 12px 14px; background: #f7f7f4; border-radius: 10px; }
+.sq-tstr-explain .body p { font-size: 13px; line-height: 1.6; color: var(--ink); }
+.sq-tstr-explain .body p + p { margin-top: 9px; }
