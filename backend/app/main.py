@@ -11,9 +11,13 @@ from .preprocessor import apply_fixes, auto_preprocess
 from .generator import generate
 from .validator import validate
 from .text_augmentor import detect_text_columns, augment_dataset, score_text_augmentation
+from app.meta import meta_router, bump_rows
+from .csv_reader import read_csv_safely, CSVReadError
+from .dataset_guard import check_dataset_usable
+from app.meta import meta_router, bump_rows, bump_datasets
 
 app = FastAPI(
-    title="SynthIQ API",
+    title="SyntheticRows API",
     description="Synthetic data generation engine",
     version="2.0.0"
 )
@@ -25,7 +29,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+app.include_router(meta_router)
 def compute_distributions(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, num_bins: int = 20) -> list:
     distributions = []
 
@@ -138,7 +142,7 @@ def compute_correlations(real_df: pd.DataFrame, synthetic_df: pd.DataFrame) -> d
 
 @app.get("/")
 def root():
-    return {"message": "SynthIQ backend is running", "version": "2.0.0"}
+    return {"message": "SyntheticRows backend is running", "version": "2.0.0"}
 
 
 @app.get("/health")
@@ -152,7 +156,15 @@ async def analyse_csv(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Only CSV files are allowed")
 
     contents = await file.read()
-    df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
+    try:
+        df = read_csv_safely(contents, file.filename)
+    except CSVReadError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    # Refuse genuinely unusable datasets with a clear explanation
+    from .text_augmentor import detect_text_columns
+    usable, reason = check_dataset_usable(df, detect_text_columns(df))
+    if not usable:
+        raise HTTPException(status_code=400, detail=reason)
     profile = profile_dataset(df, file.filename)
 
     # Flatten issues for frontend
@@ -166,6 +178,18 @@ async def analyse_csv(file: UploadFile = File(...)):
                 "recommendation": issue.recommendation,
                 "severity": issue.severity
             })
+# Distinct values of the target column (for the class-distribution UI).
+   # Distinct values of the target column + how many real examples each has
+    # (for the class-distribution UI and the "balance" helper).
+    
+    target_classes = []
+    if profile.target_column and profile.target_column in df.columns:
+        counts = df[profile.target_column].dropna().value_counts()
+        if 2 <= len(counts) <= 20:
+            target_classes = [
+                {"value": str(v), "count": int(counts[v])}
+                for v in sorted(counts.index, key=lambda x: str(x))
+            ]
 
     return {
         "filename": profile.filename,
@@ -178,6 +202,7 @@ async def analyse_csv(file: UploadFile = File(...)):
         "imbalance_ratio": profile.imbalance_ratio,
         "has_datetime": profile.has_datetime,
         "target_column": profile.target_column,
+        "target_classes": target_classes,
         "suggested_target": profile.target_column,  # suggestion only
         "columns_to_drop": profile.columns_to_drop,
         "issues": all_issues,
@@ -193,9 +218,12 @@ async def get_distributions(
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are allowed")
 
+    
     contents = await file.read()
-    real_df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
-
+    try:
+        real_df = read_csv_safely(contents, file.filename)
+    except CSVReadError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not synthetic_csv:
         raise HTTPException(status_code=400, detail="Synthetic CSV data is required")
 
@@ -274,7 +302,11 @@ async def generate_with_score(
         raise HTTPException(status_code=400, detail="Only CSV files are allowed")
 
     contents = await file.read()
-    real_df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
+    try:
+        real_df = read_csv_safely(contents, file.filename)
+    except CSVReadError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
 
     # Cap rows
     if num_rows > 1000:
@@ -310,22 +342,37 @@ async def generate_with_score(
         print("DEBUG parsed_ratios:", parsed_ratios)
 
         # Override profile target with user confirmed target
+        # Override profile target with user confirmed target
+        target_note = None
         if target_column.strip():
-            profile.target_column = target_column.strip()
-            # Re-detect imbalance with confirmed target
-            from .profiler import detect_imbalance
-            is_imb, imb_ratio = detect_imbalance(cleaned_df, target_column.strip())
-            profile.is_imbalanced = is_imb
-            profile.imbalance_ratio = imb_ratio
+            requested_target = target_column.strip()
 
-        synthetic_df, model_used = generate(cleaned_df, profile, num_rows, parsed_ratios)
-        # Use user-confirmed target if provided, else fall back to detected
-        confirmed_target = target_column.strip() if target_column.strip() else profile.target_column
+            # Guard: a target with fewer than 2 distinct values can't be predicted.
+            # Auto-fall back to unsupervised instead of crashing generation/validation.
+            if requested_target in cleaned_df.columns and cleaned_df[requested_target].nunique(dropna=False) < 2:
+                target_note = (
+                    f"The column you picked as the target (\"{requested_target}\") has the "
+                    "same value in every row, so it can't be used as a prediction target. "
+                    "We generated your data without a target instead."
+                )
+                profile.target_column = None
+            else:
+                profile.target_column = requested_target
+                # Re-detect imbalance with confirmed target
+                from .profiler import detect_imbalance
+                is_imb, imb_ratio = detect_imbalance(cleaned_df, requested_target)
+                profile.is_imbalanced = is_imb
+                profile.imbalance_ratio = imb_ratio
+
+        synthetic_df, model_used, skipped_classes = generate(cleaned_df, profile, num_rows, parsed_ratios)
+        # Use the confirmed target only if it survived the guard above
+        confirmed_target = profile.target_column
         result = validate(cleaned_df, synthetic_df, confirmed_target)
-
         output = io.StringIO()
         synthetic_df.to_csv(output, index=False)
-
+        bump_rows(len(synthetic_df))
+        bump_datasets()
+        print("DEBUG skipped_classes:", skipped_classes)
         return {
             "realism_score": result.final_score,
             "distinguishability_score": result.distinguishability_score,
@@ -334,6 +381,8 @@ async def generate_with_score(
             "grade": result.grade,
             "color": result.color,
             "rows_generated": len(synthetic_df),
+            "target_note": target_note,
+            "skipped_classes": skipped_classes,
             "model_used": model_used,
             "capped": capped,
             "max_recommended": max_recommended,
@@ -355,8 +404,11 @@ async def analyse_text(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Only CSV files are allowed")
 
     contents = await file.read()
-    df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
-
+    try:
+        df = read_csv_safely(contents, file.filename)
+    except CSVReadError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
     text_cols = detect_text_columns(df)
     non_text_cols = [c for c in df.columns if c not in text_cols]
 
@@ -389,7 +441,12 @@ async def augment_text_endpoint(
         raise HTTPException(status_code=400, detail="Only CSV files are allowed")
 
     contents = await file.read()
-    df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
+    try:
+        df = read_csv_safely(contents, file.filename)
+    except CSVReadError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+
 
     if num_rows > 1000:
         num_rows = 1000
@@ -449,7 +506,11 @@ async def generate_text_hybrid(
         raise HTTPException(status_code=400, detail="Only CSV files are allowed")
 
     contents = await file.read()
-    df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
+    try:
+        df = read_csv_safely(contents, file.filename)
+    except CSVReadError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
 
     if num_rows > 1000:
         num_rows = 1000
@@ -483,7 +544,8 @@ async def generate_text_hybrid(
 
         output = io.StringIO()
         result_df.to_csv(output, index=False)
-
+        bump_rows(len(result_df))
+        bump_datasets()
         return {
             "original_rows": len(df),
             "generated_rows": len(result_df),

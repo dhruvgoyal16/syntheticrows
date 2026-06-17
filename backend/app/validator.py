@@ -9,6 +9,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import accuracy_score
 
+
 def distinguishability_score(real_df: pd.DataFrame, synthetic_df: pd.DataFrame) -> float:
     real_num = real_df.select_dtypes(include=[np.number])
     synth_num = synthetic_df.select_dtypes(include=[np.number])
@@ -135,11 +136,12 @@ def column_quality_report(real_df: pd.DataFrame, synthetic_df: pd.DataFrame):
 
     return sorted(report, key=lambda x: x.score, reverse=True)
 
+
 def tstr_validation(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, target_col: str = None) -> dict:
     """
     Train on Synthetic, Test on Real validation.
     Compares a model trained on synthetic data vs one trained on real data,
-    both tested on held-out real data.
+    both tested on held-out real data. Supports numeric AND categorical targets.
     """
     # Find target column if not provided
     if target_col is None:
@@ -161,35 +163,51 @@ def tstr_validation(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, target_co
         return {"available": False, "reason": "No target column detected for TSTR validation"}
 
     try:
-        # Prepare real data
+        # Features must be numeric; the TARGET may be numeric OR categorical
+        # (we label-encode a categorical target so classification still works).
         real_numeric = real_df.select_dtypes(include=[np.number])
-        if target_col not in real_numeric.columns:
-            return {"available": False, "reason": "Target column is not numeric"}
 
+        # Feature columns = numeric columns excluding the target (if it's numeric)
         feature_cols = [c for c in real_numeric.columns if c != target_col]
         if len(feature_cols) == 0:
-            return {"available": False, "reason": "No feature columns found"}
+            return {"available": False, "reason": "No numeric feature columns found for ML-readiness testing"}
 
-        X_real = real_numeric[feature_cols].fillna(0)
-        y_real = real_numeric[target_col]
-
-        # Split real data into train and test
-        X_real_train, X_real_test, y_real_train, y_real_test = train_test_split(
-            X_real, y_real, test_size=0.3, random_state=42, stratify=y_real
-        )
-
-        # Prepare synthetic data
+        # Synthetic must share those feature columns
         synth_numeric = synthetic_df.select_dtypes(include=[np.number])
         common_features = [c for c in feature_cols if c in synth_numeric.columns]
-
         if len(common_features) == 0:
-            return {"available": False, "reason": "No matching feature columns in synthetic data"}
+            return {"available": False, "reason": "No matching numeric feature columns in synthetic data"}
+
+        # The target must exist in both real and synthetic
+        if target_col not in real_df.columns or target_col not in synthetic_df.columns:
+            return {"available": False, "reason": "Target column missing from synthetic data"}
+
+        # Encode the target consistently across real + synthetic so the same
+        # class maps to the same number in both (handles string targets like
+        # sentiment/category, and is harmless for already-numeric targets).
+        le = LabelEncoder()
+        combined_targets = pd.concat([
+            real_df[target_col].astype(str),
+            synthetic_df[target_col].astype(str),
+        ], ignore_index=True)
+        le.fit(combined_targets)
+
+        X_real = real_df[common_features].fillna(0)
+        y_real = le.transform(real_df[target_col].astype(str))
 
         X_synth = synth_numeric[common_features].fillna(0)
-        y_synth = synth_numeric[target_col] if target_col in synth_numeric.columns else None
+        y_synth = le.transform(synthetic_df[target_col].astype(str))
 
-        if y_synth is None:
-            return {"available": False, "reason": "Target column missing from synthetic data"}
+        # A target with only one class can't be used for classification
+        if len(np.unique(y_real)) < 2:
+            return {"available": False, "reason": "Target column has only one class — can't measure ML readiness"}
+
+        # Split real data into train and test (stratify only if every class has >= 2 samples)
+        _, counts = np.unique(y_real, return_counts=True)
+        stratify = y_real if counts.min() >= 2 else None
+        X_real_train, X_real_test, y_real_train, y_real_test = train_test_split(
+            X_real, y_real, test_size=0.3, random_state=42, stratify=stratify
+        )
 
         # Train on REAL, test on REAL (baseline)
         clf_real = RandomForestClassifier(n_estimators=50, random_state=42)
@@ -206,8 +224,37 @@ def tstr_validation(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, target_co
         gap_pct = round((abs(gap) / real_real_acc) * 100, 1) if real_real_acc > 0 else 0
         synthetic_better = synth_real_acc > real_real_acc
 
-        # Grade the gap
-        # Grade the gap
+        # ── Honesty guard: is the Real→Real baseline actually meaningful? ──
+        # If a classifier can reach ~real_real_acc just by always predicting the
+        # majority class, a small synth-vs-real gap is NOT evidence the synthetic
+        # data is good — both models are essentially guessing. In that case we
+        # return an honest "inconclusive" verdict instead of celebrating.
+        majority_class_rate = round(
+            float(pd.Series(y_real_test).value_counts(normalize=True).iloc[0]) * 100, 1
+        )
+        baseline_is_weak = real_real_acc <= max(majority_class_rate + 5, 60)
+
+        if baseline_is_weak:
+            return {
+                "available": True,
+                "target_column": target_col,
+                "real_real_accuracy": real_real_acc,
+                "synth_real_accuracy": synth_real_acc,
+                "performance_gap": gap,
+                "performance_gap_pct": gap_pct,
+                "grade": "Inconclusive",
+                "color": "yellow",
+                "interpretation": (
+                    f"This comparison isn't very meaningful for this dataset. Even a model trained on "
+                    f"real data only reaches {real_real_acc}% accuracy — about what you'd get by always "
+                    f"guessing the most common class ({majority_class_rate}%). That usually means the "
+                    f"target is hard to predict from these columns, or the classes are heavily imbalanced. "
+                    f"Read the synthetic-vs-real numbers ({synth_real_acc}% vs {real_real_acc}%) with "
+                    f"caution rather than as proof the synthetic data is good or bad."
+                ),
+            }
+
+        # Grade the gap (only reached when the baseline is meaningful)
         if synthetic_better:
             tstr_grade = "Excellent"
             tstr_color = "green"
@@ -232,6 +279,7 @@ def tstr_validation(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, target_co
             tstr_grade = "Poor"
             tstr_color = "red"
             interpretation = f"The {gap}% accuracy gap suggests your synthetic data needs improvement before use in ML training. Review and approve all recommended data quality fixes, then regenerate for better results."
+
         return {
             "available": True,
             "target_column": target_col,
@@ -246,7 +294,8 @@ def tstr_validation(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, target_co
 
     except Exception as e:
         return {"available": False, "reason": f"TSTR validation failed: {str(e)}"}
-    
+
+
 def validate(real_df: pd.DataFrame, synthetic_df: pd.DataFrame, target_col: str = None) -> ValidationResult:
     d_score = distinguishability_score(real_df, synthetic_df)
     s_score = statistical_similarity_score(real_df, synthetic_df)

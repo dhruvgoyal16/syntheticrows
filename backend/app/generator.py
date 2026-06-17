@@ -95,8 +95,11 @@ def generate(
     Returns (synthetic_df, model_name_used)
     """
     # Set seeds for reproducibility
+    # Set seeds for reproducibility
     np.random.seed(42)
     random.seed(42)
+
+    skipped_classes = []  # classes we couldn't synthesize (too few real examples)
 
     model_type, model_kwargs = select_model(profile)
     use_conditional = model_kwargs.pop("conditional", False)
@@ -106,26 +109,32 @@ def generate(
         synthetic_df = bootstrap_tiny_dataset(df, num_rows)
         synthetic_df = restore_dtypes(synthetic_df, df)
         synthetic_df = apply_domain_constraints(synthetic_df, df)
-        return synthetic_df, "Bootstrap"
+        return synthetic_df, "Bootstrap", skipped_classes
     
     # Encode discrete columns as categorical for better generation
 
     df_encoded, encoded_discrete_cols = encode_discrete_as_categorical(df, profile)
 
-    # Detect and apply log transform for skewed columns
+    # Detect and apply log transform for skewed columns — but NEVER transform
+    # the target column. Log-transforming a label (e.g. 0/1) corrupts its values
+    # (1 -> ln(2) = 0.693), which breaks class matching and conditional sampling.
     skewed_cols = detect_skewed_columns(df_encoded)
+    if profile.target_column and profile.target_column in skewed_cols:
+        skewed_cols.remove(profile.target_column)
     if skewed_cols:
         df_transformed = log_transform(df_encoded, skewed_cols)
     else:
         df_transformed = df_encoded.copy()
-
+        
     metadata = Metadata.detect_from_dataframe(df_transformed)
     synthesizer = build_synthesizer(model_type, metadata, model_kwargs)
     synthesizer.fit(df_transformed)
 
     # Use custom class ratios if provided
+    # Use custom class ratios if provided
     if class_ratios and profile.target_column and profile.target_column in df.columns:
         frames = []
+        MIN_CLASS_ROWS = 10  # need at least this many real examples to synthesize a class
 
         for class_val, count in class_ratios.items():
             try:
@@ -139,11 +148,30 @@ def generate(
 
                 n = int(count)
 
+                # Count real examples of this class in the ORIGINAL data (df),
+                # not df_transformed — the original is the honest source of how
+                # many real examples exist, unaffected by encoding/transforms.
+                real_count = int((df[profile.target_column] == class_val_typed).sum())
+
+                if real_count < MIN_CLASS_ROWS:
+                    # Too few real examples to synthesize this class honestly.
+                    skipped_classes.append({
+                        "class_value": str(class_val),
+                        "requested": n,
+                        "real_examples": real_count,
+                    })
+                    continue
+
                 class_df = df_transformed[
                     df_transformed[profile.target_column] == class_val_typed
                 ]
-
-                if len(class_df) < 10:
+                if len(class_df) < MIN_CLASS_ROWS:
+                    # Defensive: matched too few in transformed data (e.g. value mismatch)
+                    skipped_classes.append({
+                        "class_value": str(class_val),
+                        "requested": n,
+                        "real_examples": real_count,
+                    })
                     continue
 
                 class_metadata = Metadata.detect_from_dataframe(class_df)
@@ -194,4 +222,4 @@ def generate(
     # Apply domain constraints
     synthetic_df = apply_domain_constraints(synthetic_df, df)
 
-    return synthetic_df, model_type.value
+    return synthetic_df, model_type.value, skipped_classes

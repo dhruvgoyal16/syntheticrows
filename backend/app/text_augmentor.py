@@ -34,20 +34,33 @@ def is_text_column(series: pd.Series, min_avg_words: int = 3) -> bool:
     if series.dtype != object:
         return False
 
-    sample = series.dropna().head(50)
+    sample = series.dropna().head(200)
     if len(sample) == 0:
         return False
 
-    # Calculate average word count first
-    avg_words = sample.apply(lambda x: len(str(x).split())).mean()
+    str_sample = sample.astype(str)
+    avg_words = str_sample.apply(lambda x: len(x.split())).mean()
+    avg_chars = str_sample.apply(len).mean()
 
-    # If average words >= min_avg_words, it's text regardless of uniqueness
+    # 1. Clearly text: multi-word entries (sentences, reviews, descriptions).
     if avg_words >= min_avg_words:
         return True
 
-    # Skip if too many unique values look like IDs (only for short text)
-    if series.nunique() / len(series) > 0.95:
+    # 2. Short text (1–2 words) — distinguish free text from a category by VARIETY.
+    #    A category recycles a small set of values; free text has many distinct ones.
+    n = len(sample)
+    uniqueness = series.nunique() / len(series) if len(series) else 0
+
+    # Pure identifiers (almost every value unique AND very short tokens) aren't
+    # meaningful text to augment — skip them.
+    if uniqueness > 0.95 and avg_chars < 12:
         return False
+
+    # Short but varied + reasonably wordy/long = short free text (reviews, tweets,
+    # titles, headlines). Require some variety so we don't flag low-card categories
+    # (city, plan, status) as text.
+    if avg_words >= 1.5 and uniqueness >= 0.30 and avg_chars >= 6:
+        return True
 
     return False
 

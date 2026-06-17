@@ -14,6 +14,10 @@ frontend/out/
 # Python
 backend/venv/
 *.egg-info/
-
+# Database (real stats + waitlist data — never commit)
+*.db
+*.sqlite
+*.sqlite3
+backend/app/synthiq_meta.db
 # OS
 .DS_Store
