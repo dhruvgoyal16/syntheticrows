@@ -77,6 +77,7 @@ const FOOTER_QUIPS = [
   "100% synthetic. 0% \"we'll totally delete your data later, trust us.\"",
 ]
 
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 const sColor = (v) => v >= 80 ? "var(--good)" : v >= 60 ? "var(--warn)" : "var(--bad)"
 const sWash = (v) => v >= 80 ? "var(--good-wash)" : v >= 60 ? "var(--warn-wash)" : "var(--bad-wash)"
 const tstrScore = (c) => c === "green" ? 90 : c === "yellow" ? 70 : 40
@@ -195,7 +196,7 @@ export default function Home() {
 
   const fetchStats = async () => {
     try {
-      const r = await fetch("http://localhost:8000/stats")
+      const r = await fetch(`${API}/stats`)
       if (r.ok) setStats(await r.json())
     } catch { /* stats are non-critical */ }
   }
@@ -204,7 +205,7 @@ export default function Home() {
   const submitWaitlist = async () => {
     setWlState("sending"); setWlMsg("")
     try {
-      const r = await fetch("http://localhost:8000/waitlist", {
+      const r = await fetch(`${API}/waitlist`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: wlEmail || null, interest: wlInterest || null })
       })
@@ -237,11 +238,11 @@ export default function Home() {
     setLoading(true); setError(null)
     try {
       const tf = new FormData(); tf.append("file", file)
-      const tr = await fetch("http://localhost:8000/analyse-text", { method: "POST", body: tf })
+      const tr = await fetch(`${API}/analyse-text`, { method: "POST", body: tf })
       if (!tr.ok) { const e = await tr.json().catch(() => ({})); throw new Error(e.detail || "Could not analyse this file.") }
       const td = await tr.json(); setTextInfo(td)
       const af = new FormData(); af.append("file", file)
-      const r = await fetch("http://localhost:8000/analyse", { method: "POST", body: af })
+      const r = await fetch(`${API}/analyse`, { method: "POST", body: af })
       if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || "Could not analyse this file.") }
       const d = await r.json(); setSummary(d)
       setIssues(d.issues)
@@ -273,7 +274,7 @@ export default function Home() {
     const rp = Object.keys(ar).length ? `&class_ratios=${encodeURIComponent(JSON.stringify(ar))}` : ""
     const tp = targetColumn ? `&target_column=${encodeURIComponent(targetColumn)}` : ""
     try {
-      const res = await fetch(`http://localhost:8000/generate-with-score?num_rows=${numRows}${rp}${tp}`, { method: "POST", body: fd })
+      const res = await fetch(`${API}/generate-with-score?num_rows=${numRows}${rp}${tp}`, { method: "POST", body: fd })
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail) }
       const d = await res.json(); setResult(d); setStep("result")
       setHistory((p) => [{ id: Date.now(), filename: file.name, rows: d.rows_generated, score: d.realism_score, kind: "tabular", csv: d.csv_data, time: new Date().toLocaleTimeString() }, ...p].slice(0, 5))
@@ -290,7 +291,7 @@ export default function Home() {
     const fd = new FormData(); fd.append("file", file)
     const lp = textLabel ? `&label_column=${encodeURIComponent(textLabel)}` : ""
     try {
-      const res = await fetch(`http://localhost:8000/generate-text-hybrid?num_rows=${numRows}&augmentation_strength=${textStrength}${lp}`, { method: "POST", body: fd })
+      const res = await fetch(`${API}/generate-text-hybrid?num_rows=${numRows}&augmentation_strength=${textStrength}${lp}`, { method: "POST", body: fd })
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail) }
       const d = await res.json(); setTextResult(d); setStep("result")
       setHistory((p) => [{ id: Date.now(), filename: file.name, rows: d.generated_rows, score: d.quality.overall_score, kind: "text", csv: d.csv_data, time: new Date().toLocaleTimeString() }, ...p].slice(0, 5))
