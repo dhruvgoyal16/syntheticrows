@@ -124,8 +124,17 @@ function DistChart({ dist }) {
   const top = Math.ceil(max)
   const yTicks = [top, Math.round(top / 2), 0]
   const fmtX = (v) => typeof v === "number" ? (Math.abs(v) >= 100 ? Math.round(v) : Math.round(v * 10) / 10) : v
-  // show ~6 x labels evenly so they don't overlap
-  const step = Math.max(1, Math.ceil(xs.length / 6))
+  // Pick ~6 evenly-spaced label indices to show (first … last), so the x-axis
+  // never renders one span per bin (which overflowed the card on wide data).
+  const labelCount = Math.min(6, xs.length)
+  const labelIdx = []
+  if (xs.length > 0) {
+    if (xs.length === 1) labelIdx.push(0)
+    else for (let i = 0; i < labelCount; i++) {
+      labelIdx.push(Math.round((i * (xs.length - 1)) / (labelCount - 1)))
+    }
+  }
+  const uniqueIdx = [...new Set(labelIdx)]
   return (
     <div className="sq-chart">
       <div className="ch-top">
@@ -146,7 +155,9 @@ function DistChart({ dist }) {
             ))}
           </div>
           <div className="sq-xaxis">
-            {xs.map((x, i) => <span key={i} style={{ visibility: i % step === 0 || i === xs.length - 1 ? "visible" : "hidden" }}>{fmtX(x)}</span>)}
+            {uniqueIdx.map((idx) => (
+              <span key={idx} style={{ left: `${xs.length <= 1 ? 0 : (idx / (xs.length - 1)) * 100}%` }}>{fmtX(xs[idx])}</span>
+            ))}
           </div>
         </div>
       </div>
@@ -180,6 +191,7 @@ export default function Home() {
   const [textLabel, setTextLabel] = useState("")
   const [textResult, setTextResult] = useState(null)
   const [showPro, setShowPro] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
   const [stats, setStats] = useState(null)
   const [wlEmail, setWlEmail] = useState("")
   const [wlInterest, setWlInterest] = useState("")
@@ -341,6 +353,10 @@ export default function Home() {
                 </div>
               )
             })}
+            <button className="sq-help-btn" onClick={() => setShowHelp(true)} title="How to read your results">
+              <span className="sq-help-q">?</span>
+              <span className="sq-help-txt">Know more</span>
+            </button>
           </div>
         </div>
       </header>
@@ -478,8 +494,7 @@ export default function Home() {
 
               <div className="sq-field">
                 <div className="lab">Target column</div>
-                <div className="help">The column your model predicts. Used for ML-readiness scoring and class balancing. Leave as None for unsupervised data.</div>
-                <select className="sq-input" value={targetColumn} onChange={(e) => setTargetColumn(e.target.value)} disabled={generating}>
+                  <div className="help">Pick the column you eventually want to predict (e.g. price, churn, category). We use it to test whether your synthetic data is good enough to train a model. Not predicting anything? Leave it as None.</div>                <select className="sq-input" value={targetColumn} onChange={(e) => setTargetColumn(e.target.value)} disabled={generating}>
                   <option value="">None (unsupervised)</option>
                   {summary?.column_names?.map((c) => <option key={c} value={c}>{c}{c === summary?.suggested_target ? " ✦ suggested" : ""}</option>)}
                 </select>
@@ -659,25 +674,27 @@ export default function Home() {
                   <summary>What is this, and how do I read it?</summary>
                   <div className="body">
                     <p>This is the real test of whether your synthetic data is good enough to <b>train a machine-learning model</b>. We train two models to predict your target column ({targetColumn || "the selected column"}): one on your <b>real</b> data, one on your <b>synthetic</b> data. Then we test <b>both on real data they've never seen</b>.</p>
-                    <p><b>Real → Real</b> is the benchmark: how well a model does when trained on real data. <b>Synthetic → Real</b> is the one that matters: how well a model trained on your synthetic data performs on real data. The <b>accuracy gap</b> between them tells the story — a small gap means your synthetic data is nearly as useful as the real thing for training models.</p>
-                  </div>
+                    <p><b>Real → Real</b> is the benchmark: how well a model does when trained on real data. <b>Synthetic → Real</b> is the one that matters: how well a model trained on your synthetic data performs on real data. The <b>gap</b> between them tells the story — a small gap means your synthetic data is nearly as useful as the real thing for training models. {result.tstr.is_regression ? "For a numeric target, the scores are a 0\u2013100 \u201cfit score\u201d (how well the model predicts the value) rather than a classification accuracy." : ""}</p>                  </div>
                 </details>
                 {(() => {
                   const isNeutral = result.tstr.color === "neutral"
                   const tColor = isNeutral ? "var(--muted)" : sColor(tstrScore(result.tstr.color))
                   const tWash = isNeutral ? "#f1f1ee" : sWash(tstrScore(result.tstr.color))
+                  const isReg = result.tstr.is_regression
+                  const unit = isReg ? "" : "%"
+                  const gapLabel = isReg ? "Fit score gap" : "Accuracy gap"
                   return (
                     <div className="sq-tstr">
-                      <div className="sq-tstr-box"><div className="k">Real → Real</div><div className="v">{result.tstr.real_real_accuracy}%</div></div>
-                      <div className="sq-tstr-box"><div className="k">Synthetic → Real</div><div className="v" style={{ color: tColor }}>{result.tstr.synth_real_accuracy}%</div></div>
-                      <div className="sq-tstr-box flag" style={{ background: tWash }}><div className="k">Accuracy gap</div><div className="v" style={{ color: tColor }}>{result.tstr.performance_gap}%</div><div className="g" style={{ color: tColor }}>{result.tstr.grade}</div></div>
+                      <div className="sq-tstr-box"><div className="k">Real → Real</div><div className="v">{result.tstr.real_real_accuracy}{unit}</div></div>
+                      <div className="sq-tstr-box"><div className="k">Synthetic → Real</div><div className="v" style={{ color: tColor }}>{result.tstr.synth_real_accuracy}{unit}</div></div>
+                      <div className="sq-tstr-box flag" style={{ background: tWash }}><div className="k">{gapLabel}</div><div className="v" style={{ color: tColor }}>{result.tstr.performance_gap}{unit}</div><div className="g" style={{ color: tColor }}>{result.tstr.grade}</div></div>
                     </div>
                   )
                 })()}
                 <p className="sq-intro">{result.tstr.interpretation}</p>
                 {result.tstr.synth_real_accuracy <= 30 && (
                   <div className="sq-tstr-note">
-                    <b>What a low score means.</b> A model trained on this synthetic data scored just {result.tstr.synth_real_accuracy}% on your real data — meaning the synthetic rows didn't preserve enough of the real signal between your features and the target ({targetColumn || "selected target"}) to train a useful model. This is an honest result, not an error. It usually happens when the dataset is small, noisy, heavily imbalanced, or the target is weakly related to the other columns. Try approving more data-quality fixes, picking a different target column, or generating more rows.
+                    <b>What a low score means.</b> A model trained on this synthetic data scored just {result.tstr.synth_real_accuracy}{result.tstr.is_regression ? " out of 100" : "%"} on your real data — meaning the synthetic rows didn't preserve enough of the real signal between your features and the target ({targetColumn || "selected target"}) to train a useful model. This is an honest result, not an error. It usually happens when the dataset is small, noisy, heavily imbalanced, or the target is weakly related to the other columns. Try approving more data-quality fixes, picking a different target column, or generating more rows.
                   </div>
                 )}
               </div>
@@ -945,6 +962,98 @@ export default function Home() {
             {stats?.waitlist_visible
               ? <p className="sq-wl-count">Join <b>{fmt(stats.waitlist_count)}</b> others on the Pro waitlist</p>
               : <p className="sq-wl-count">Be one of the first to get Pro — early-access members get founding pricing.</p>}
+          </div>
+        </div>
+      )}
+
+      {/* ── Help / "Know more" modal ── */}
+      {showHelp && (
+        <div className="sq-modal-overlay" onClick={() => setShowHelp(false)}>
+          <div className="sq-modal" onClick={(e) => e.stopPropagation()}>
+            <button className="sq-modal-close" onClick={() => setShowHelp(false)}>✕</button>
+            <div className="sq-modal-head">
+              <div className="sq-eyebrow" style={{ color: "var(--yellow-deep)" }}>Guide</div>
+              <h2 className="sq-modal-title">Understanding your results</h2>
+              <p className="sq-modal-sub">Everything SyntheticRows shows you, explained in plain language — what each score means, how to read the charts, and how to get better results.</p>
+            </div>
+
+            <div className="sq-help">
+
+              <section className="sq-help-sec">
+                <h3>What SyntheticRows actually does</h3>
+                <p>You upload a small CSV. SyntheticRows studies the patterns in it — the shape of each column, how columns relate to each other — and then generates brand-new rows that follow those same patterns without copying your real rows. The result is a larger, realistic dataset you can use to train models, run tests, or share without exposing real records.</p>
+                <p>Crucially, it never invents signal that isn't there. If your data is small or noisy, the scores will say so honestly rather than pretending the synthetic data is perfect.</p>
+              </section>
+
+              <section className="sq-help-sec">
+                <h3>The Realism score (the big number)</h3>
+                <p>This is the headline 0–100 score. It's a weighted blend of three checks, so a single number summarizes overall quality:</p>
+                <ul className="sq-help-list">
+                  <li><b>Statistical similarity (50%)</b> — Do the synthetic columns have the same averages and spread as the real ones? For example, if real ages average 39 with a typical spread, the synthetic ages should too. This is weighted highest because matching distributions is the core of good synthetic data.</li>
+                  <li><b>Coverage (30%)</b> — Does the synthetic data span the full range of real values? If your real prices run from ₹100 to ₹60,000, synthetic data that only covers ₹100–₹20,000 has poor coverage — it's missing the high end.</li>
+                  <li><b>Distinguishability (20%)</b> — We train a small classifier to tell real rows from synthetic ones. If it <i>can't</i> tell them apart, your synthetic data is convincing (high score). If it easily spots the fakes, the score drops.</li>
+                </ul>
+                <p className="sq-help-bands"><b>How to read it:</b> <span className="sq-help-tag good">80–100 Excellent</span> ready for real ML use · <span className="sq-help-tag warn">60–79 Good</span> usable for most tasks · <span className="sq-help-tag bad">below 60 Fair</span> fine for prototyping, approve more fixes and regenerate.</p>
+              </section>
+
+              <section className="sq-help-sec">
+                <h3>ML readiness (TSTR) — the most important test</h3>
+                <p>The scores above measure how <i>realistic</i> the data looks. TSTR measures something stronger: whether your synthetic data is actually <b>useful for training a model</b>. TSTR stands for "Train on Synthetic, Test on Real."</p>
+                <p>Here's the experiment: we train two models to predict your target column — one trained on your <b>real</b> data, one trained on your <b>synthetic</b> data. Then we test <b>both on real data they've never seen</b>. If the synthetic-trained model does almost as well as the real-trained one, your synthetic data captured the real relationships. That's the gold standard.</p>
+                <ul className="sq-help-list">
+                  <li><b>Real → Real</b> — the benchmark. How well a model does when trained on real data. This is the ceiling you're aiming for.</li>
+                  <li><b>Synthetic → Real</b> — the one that matters. How well a model trained on your synthetic data performs on real data.</li>
+                  <li><b>The gap</b> — the difference between them. A small gap means your synthetic data is nearly as good as the real thing for training.</li>
+                </ul>
+                <p><b>Classification vs regression targets.</b> If your target is a category (e.g. churned yes/no, grade A–D), the numbers are <b>accuracy</b> percentages. If your target is a continuous number (e.g. price, charges, temperature), they're a 0–100 <b>"fit score"</b> (technically R², how well the model predicts the value). SyntheticRows detects which kind you have automatically and shows the right labels.</p>
+                <p><b>"Inconclusive" results.</b> Sometimes even the real-data model can't predict the target well. When that happens, comparing synthetic to real tells us nothing — so we honestly mark it inconclusive rather than show a misleading score. It usually means the target is weakly related to the other columns, or heavily imbalanced.</p>
+              </section>
+
+              <section className="sq-help-sec">
+                <h3>The distribution charts</h3>
+                <p>Each small chart compares one column. <b>Black bars are your real data; yellow bars are the synthetic data.</b> The closer the yellow bars track the black ones, the better that column was reproduced. Hover any bar group to see the exact real vs synthetic percentages for that value range.</p>
+                <p>For number columns, the header shows the mean shifting from real → synthetic (e.g. <i>mean 39.2 → 39.6</i>) — close numbers are good. For category columns, it says "label aligned," meaning the categories match up.</p>
+              </section>
+
+              <section className="sq-help-sec">
+                <h3>Correlation preservation &amp; column quality</h3>
+                <p><b>Correlation heatmaps</b> show how columns relate to each other in real vs synthetic data. Good synthetic data preserves these relationships — if age and charges rise together in your real data, they should in the synthetic too. The "diff" pill summarizes how much the relationships drifted (lower is better).</p>
+                <p><b>Column quality</b> grades each individual column 0–100 by how closely its synthetic version matches the real one's average and spread. It's the quickest way to spot which specific column dragged your score down.</p>
+              </section>
+
+              <section className="sq-help-sec">
+                <h3>Settings that change your results</h3>
+                <ul className="sq-help-list">
+                  <li><b>Target column</b> — the column you eventually want to predict. It drives the ML-readiness test and (for categories) class balancing. Leave it as None if you're not predicting anything.</li>
+                  <li><b>Rows to generate</b> — how many synthetic rows to create (free tier: up to 1,000). More rows don't improve quality, but give you a larger dataset to work with.</li>
+                  <li><b>Class distribution / Balance classes</b> — for category targets, you can set how many rows of each class to generate. "Balance classes" evens them out — useful when one class is rare and you want a balanced training set. (This doesn't appear for numeric targets, since they have no classes.)</li>
+                  <li><b>Data-quality fixes</b> — in the Review step, we flag issues (missing values, outliers, ID columns, etc.) and fix them by default. Approving more fixes usually raises your scores. Each fix explains what it does and why.</li>
+                  <li><b>Which model is used</b> — SyntheticRows picks the best synthesis model for your data automatically: CTGAN for most categorical data, TVAE for continuous (regression) targets, GaussianCopula for small clean numeric sets, and PAR for time-series. You'll see which one ran in the Run summary.</li>
+                </ul>
+              </section>
+
+              <section className="sq-help-sec">
+                <h3>How to get better results</h3>
+                <ul className="sq-help-list">
+                  <li><b>Approve the data-quality fixes.</b> They're on by default for a reason — clean input produces better synthetic output.</li>
+                  <li><b>Give it more real rows.</b> The single biggest lever. A model can only learn patterns it can see; 50 rows is hard, 1,000 is much easier.</li>
+                  <li><b>Pick a meaningful target.</b> If ML readiness is low or inconclusive, your target may be weakly related to the other columns. Try a target the other columns can actually predict.</li>
+                  <li><b>For rare classes, collect more examples.</b> No tool can reliably synthesize a class with only a handful of real rows — the honest fix is more real data, not a setting.</li>
+                  <li><b>Regression is harder than classification.</b> Predicting an exact number is tougher than predicting a category, so numeric targets often score a bit lower. That's expected, not a failure.</li>
+                </ul>
+              </section>
+
+              <section className="sq-help-sec">
+                <h3>What the grades mean — and our honesty promise</h3>
+                <p>You'll see grades like <b>Excellent, Good, Fair, Poor,</b> and <b>Inconclusive</b>. We deliberately don't inflate them. A "Poor" or "Fair" result isn't the tool breaking — it's an honest signal that this particular dataset and target are hard to synthesize well, usually because the data is small, noisy, imbalanced, or the target is weakly related to its features.</p>
+                <p>We'd rather tell you the truth so you can fix the input than hand you a falsely high score you can't trust. That honesty is the whole point of SyntheticRows.</p>
+              </section>
+
+            </div>
+
+            <div className="sq-help-foot">
+              <p>Still stuck or have an idea? <a href="https://docs.google.com/forms/d/e/1FAIpQLScHyvSe14UAJeBMT3l5ZH7s182SG5MYgIVBsqnk4nIbXp_F-A/viewform" target="_blank" rel="noopener noreferrer">Share a suggestion →</a></p>
+            </div>
           </div>
         </div>
       )}

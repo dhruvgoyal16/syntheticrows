@@ -66,6 +66,7 @@ class DatasetProfile(BaseModel):
     has_datetime: bool
     has_target_column: bool
     target_column: Optional[str]
+    target_type: Optional[str] = None  # "classification" | "regression" | None
     is_imbalanced: bool
     imbalance_ratio: Optional[float]
     columns: List[ColumnProfile]

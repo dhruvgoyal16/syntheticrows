@@ -6,9 +6,16 @@ def select_model(profile: DatasetProfile) -> tuple[ModelType, dict]:
     Returns (model_type, model_kwargs) based on dataset profile.
     """
 
-    # Time series — always use PAR
+   # Time series — always use PAR
     if profile.dataset_type == DatasetType.TIME_SERIES:
         return ModelType.PAR, {}
+
+    # Regression (continuous target) — TVAE (tuned) preserves continuous
+    # feature→target relationships far better than CTGAN/GaussianCopula
+    # (evidence: TSTR fit ~79 vs ~50). Checked before imbalance/size rules,
+    # since those are classification-oriented and would misroute regression.
+    if getattr(profile, "target_type", None) == "regression":
+        return ModelType.TVAE, {"epochs": 600}
 
     num_rows = profile.num_rows
 

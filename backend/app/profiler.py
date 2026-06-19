@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Tuple
+from typing import Tuple,Optional
 from .models import (
     ColumnType, DatasetType, DatasetSize,
     ColumnIssue, ColumnProfile, DatasetProfile
@@ -227,58 +227,103 @@ def detect_dataset_type(df: pd.DataFrame, col_types: dict) -> DatasetType:
     return DatasetType.STANDARD
 
 
-def detect_target_column(df: pd.DataFrame) -> Tuple[bool, str]:
-    """
-    Suggest a likely target column using data characteristics.
-    This is a suggestion only — user should confirm.
-    Recognizes binary AND low-cardinality multi-class targets (e.g. sentiment
-    with positive/negative/neutral), preferring name hints, then position.
-    """
-    target_hints = [
-        "default", "churn", "fraud", "survived", "outcome", "target",
-        "label", "class", "result", "approved", "converted", "clicked",
-        "purchased", "cancelled", "failed", "success", "win", "loss",
-        "y", "output", "response", "event", "flag", "status", "disease",
-        "died", "dead", "active", "inactive", "valid", "invalid",
-        "sentiment", "category", "rating", "grade", "type", "tier", "level"
-    ]
+# Name hints suggesting a CONTINUOUS (regression) target
+_REGRESSION_HINTS = [
+    "price", "charges", "charge", "cost", "amount", "salary", "wage", "revenue",
+    "sales", "income", "value", "amt", "total", "spend", "spending", "fare", "rent",
+    "premium", "balance", "duration", "length", "weight", "height", "temperature",
+    "temp", "consumption", "demand", "yield", "profit", "mpg",
+]
 
+# Name hints suggesting a CLASSIFICATION target
+_CLASSIFICATION_HINTS = [
+    "default", "churn", "fraud", "survived", "outcome", "target", "label", "class",
+    "result", "approved", "converted", "clicked", "purchased", "cancelled", "failed",
+    "success", "win", "loss", "y", "output", "response", "event", "flag", "status",
+    "disease", "died", "dead", "active", "inactive", "valid", "invalid", "sentiment",
+    "category", "grade", "type", "tier", "level",
+]
+
+
+def _is_continuous_target(df: pd.DataFrame, col: str, n_rows: int) -> bool:
+    """Numeric column with high cardinality -> plausible regression target.
+    Rejects low-cardinality (classification) columns and perfect-ID integers."""
+    if not pd.api.types.is_numeric_dtype(df[col]):
+        return False
+    nu = df[col].nunique(dropna=True)
+    if nu <= 20:
+        return False
+    if pd.api.types.is_float_dtype(df[col]):
+        return True
+    uniq_ratio = nu / n_rows
+    return 0.05 < uniq_ratio < 0.999
+
+
+def _is_class_candidate(df: pd.DataFrame, col: str, n_rows: int) -> bool:
+    """2-20 recurring distinct values -> plausible classification target."""
+    nu = df[col].nunique(dropna=True)
+    return 2 <= nu <= 20 and (nu / n_rows) < 0.5
+
+
+def classify_target_type(df: pd.DataFrame, col: str) -> Optional[str]:
+    """Label a chosen target column as 'regression' or 'classification'.
+    Used both for the detected target and for a user-confirmed target."""
+    if col is None or col not in df.columns:
+        return None
+    return "regression" if _is_continuous_target(df, col, len(df)) else "classification"
+
+
+def detect_target_column(df: pd.DataFrame) -> Tuple[bool, Optional[str], Optional[str]]:
+    """
+    Suggest a likely target column AND its type ('classification' | 'regression').
+    Suggestion only — the user confirms/overrides in the UI.
+
+    Strategy (position is the strongest real-world signal):
+      1. The LAST column, if it's a plausible target, judged by its own type.
+      2. Name hints (classification names first, then regression), as fallback.
+      3. Existing classification structural logic.
+      4. Any continuous column as a last resort.
+    """
     n_rows = len(df)
-    if n_rows == 0:
-        return False, None
+    if n_rows == 0 or len(df.columns) == 0:
+        return False, None, None
 
-    # A column is a plausible classification target if it has few distinct
-    # classes relative to the data: 2 to 20 unique values, and not near-unique.
-    def is_candidate(col):
-        nu = df[col].nunique(dropna=True)
-        if nu < 2 or nu > 20:
-            return False
-        # must repeat: a target's classes recur across many rows
-        return (nu / n_rows) < 0.5
+    cols = list(df.columns)
+    last = cols[-1]
 
-    candidates = [c for c in df.columns if is_candidate(c)]
-    if not candidates:
-        return False, None
+    # Priority 1 — the conventional target position: the last column.
+    if _is_continuous_target(df, last, n_rows):
+        return True, last, "regression"
+    if _is_class_candidate(df, last, n_rows):
+        return True, last, "classification"
 
-    # Priority 1 — a candidate whose name contains a target hint (prefer last).
-    for col in reversed(candidates):
-        if any(hint in col.lower() for hint in target_hints):
-            return True, col
+    # Priority 2 — name hints (only if the last column wasn't a clear target).
+    for col in reversed(cols):
+        if any(h in col.lower() for h in _CLASSIFICATION_HINTS) and _is_class_candidate(df, col, n_rows):
+            return True, col, "classification"
+    for col in reversed(cols):
+        if any(h in col.lower() for h in _REGRESSION_HINTS) and _is_continuous_target(df, col, n_rows):
+            return True, col, "regression"
 
-    # Priority 2 — a binary numeric (0/1) candidate near the end.
-    for col in reversed(candidates):
-        if pd.api.types.is_numeric_dtype(df[col]):
-            vals = set(df[col].dropna().unique())
-            if vals.issubset({0, 1, 0.0, 1.0}):
-                return True, col
+    # Priority 3 — classification structural logic (unchanged from before).
+    class_cols = [c for c in cols if _is_class_candidate(df, c, n_rows)]
+    if class_cols:
+        for col in reversed(class_cols):
+            if pd.api.types.is_numeric_dtype(df[col]):
+                vals = set(df[col].dropna().unique())
+                if vals.issubset({0, 1, 0.0, 1.0}):
+                    return True, col, "classification"
+        binary = [c for c in class_cols if df[c].nunique(dropna=True) == 2]
+        if binary:
+            return True, binary[-1], "classification"
+        return True, class_cols[-1], "classification"
 
-    # Priority 3 — the last binary candidate (2 classes) as a safe fallback.
-    binary = [c for c in candidates if df[c].nunique(dropna=True) == 2]
-    if binary:
-        return True, binary[-1]
+    # Priority 4 — any continuous column as a last resort.
+    cont = [c for c in cols if _is_continuous_target(df, c, n_rows)]
+    if cont:
+        return True, cont[-1], "regression"
 
-    # Priority 4 — fall back to the last candidate overall.
-    return True, candidates[-1]
+    return False, None, None
 
 def detect_imbalance(df: pd.DataFrame, target_col: str = None) -> Tuple[bool, float]:
     check_col = target_col
@@ -362,7 +407,7 @@ def profile_dataset(df: pd.DataFrame, filename: str = "dataset.csv") -> DatasetP
         ))
 
     dataset_type = detect_dataset_type(df, col_types)
-    has_target, target_col = detect_target_column(df)
+    has_target, target_col, target_type = detect_target_column(df)
     is_imbalanced, imbalance_ratio = detect_imbalance(df, target_col)
 
     return DatasetProfile(
@@ -374,6 +419,7 @@ def profile_dataset(df: pd.DataFrame, filename: str = "dataset.csv") -> DatasetP
         has_datetime=any(t == ColumnType.DATETIME for t in col_types.values()),
         has_target_column=has_target,
         target_column=target_col,
+        target_type=target_type,
         is_imbalanced=is_imbalanced,
         imbalance_ratio=imbalance_ratio,
         columns=column_profiles,

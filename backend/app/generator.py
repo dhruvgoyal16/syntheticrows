@@ -53,7 +53,8 @@ def build_synthesizer(model_type: ModelType, metadata: Metadata, kwargs: dict):
         epochs = kwargs.get("epochs", 300)
         return CTGANSynthesizer(metadata, epochs=epochs, verbose=False, cuda=False)
     elif model_type == ModelType.TVAE:
-        return TVAESynthesizer(metadata)
+        epochs = kwargs.get("epochs", 300)
+        return TVAESynthesizer(metadata, epochs=epochs, verbose=False)
     else:
         return CTGANSynthesizer(metadata, epochs=200, verbose=False, cuda=False)
 
@@ -98,7 +99,9 @@ def generate(
     # Set seeds for reproducibility
     np.random.seed(42)
     random.seed(42)
-
+    # Regression targets have no classes — never attempt class-conditional sampling.
+    if getattr(profile, "target_type", None) == "regression":
+        class_ratios = {}
     skipped_classes = []  # classes we couldn't synthesize (too few real examples)
 
     model_type, model_kwargs = select_model(profile)

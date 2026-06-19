@@ -207,6 +207,7 @@ async def analyse_csv(file: UploadFile = File(...)):
         "imbalance_ratio": profile.imbalance_ratio,
         "has_datetime": profile.has_datetime,
         "target_column": profile.target_column,
+        "target_type": profile.target_type,
         "target_classes": target_classes,
         "suggested_target": profile.target_column,  # suggestion only
         "columns_to_drop": profile.columns_to_drop,
@@ -352,8 +353,6 @@ async def generate_with_score(
         if target_column.strip():
             requested_target = target_column.strip()
 
-            # Guard: a target with fewer than 2 distinct values can't be predicted.
-            # Auto-fall back to unsupervised instead of crashing generation/validation.
             if requested_target in cleaned_df.columns and cleaned_df[requested_target].nunique(dropna=False) < 2:
                 target_note = (
                     f"The column you picked as the target (\"{requested_target}\") has the "
@@ -361,10 +360,14 @@ async def generate_with_score(
                     "We generated your data without a target instead."
                 )
                 profile.target_column = None
+                profile.target_type = None
             else:
                 profile.target_column = requested_target
+                # Recompute the target TYPE for the user-confirmed column,
+                # so regression vs classification is correct even on override.
+                from .profiler import detect_imbalance, classify_target_type
+                profile.target_type = classify_target_type(cleaned_df, requested_target)
                 # Re-detect imbalance with confirmed target
-                from .profiler import detect_imbalance
                 is_imb, imb_ratio = detect_imbalance(cleaned_df, requested_target)
                 profile.is_imbalanced = is_imb
                 profile.imbalance_ratio = imb_ratio
@@ -372,7 +375,8 @@ async def generate_with_score(
         synthetic_df, model_used, skipped_classes = generate(cleaned_df, profile, num_rows, parsed_ratios)
         # Use the confirmed target only if it survived the guard above
         confirmed_target = profile.target_column
-        result = validate(cleaned_df, synthetic_df, confirmed_target)
+        confirmed_target_type = profile.target_type
+        result = validate(cleaned_df, synthetic_df, confirmed_target, confirmed_target_type)
         output = io.StringIO()
         synthetic_df.to_csv(output, index=False)
         bump_rows(len(synthetic_df))
